@@ -62,10 +62,34 @@ class BrainToTextDecoder_Trainer:
 
         self.transform_args = self.args['dataset']['data_transforms']
 
-        # Initialize S3 filesystem
-        self.s3 = s3fs.S3FileSystem(anon=False)
-        self.s3_base_path = 's3://4k-woody-btt/4k/data/hdf5_data_final'
+        # # Initialize S3 filesystem
+        # self.s3 = s3fs.S3FileSystem(anon=False)
+        # # # self.s3_base_path = 's3://4k-woody-btt/4k/data/hdf5_data_final'
+        # channel_path = os.environ.get('SM_CHANNEL_TRAINING', None)
+        
+        # if channel_path is not None:
+        #     # SageMaker 채널로 받은 로컬 경로
+        #     self.data_base_path = channel_path
+        #     self.use_s3fs = False
+        #     self.logger.info(f'Using local channel data path: {self.data_base_path}')
+        # else:
+        #     # 채널이 없으면 기존 S3 경로 사용
+        #     self.data_base_path = 's3://4k-woody-btt/4k/data/hdf5_data_final'
+        #     self.use_s3fs = True
+        #     self.logger.info(f'Using S3 base path: {self.data_base_path}')
 
+            
+        # train_file_paths = [
+        #     os.path.join(self.data_base_path, s, 'data_train.hdf5')
+        #     for s in self.args['dataset']['sessions']
+        # ]
+        # val_file_paths = [
+        #     os.path.join(self.data_base_path, s, 'data_val.hdf5')
+        #     for s in self.args['dataset']['sessions']
+        # ]
+
+
+        self.s3 = s3fs.S3FileSystem(anon=False)
         # Create output directory (support both local and S3 paths)
         if args['mode'] == 'train':
             if self.args['output_dir'].startswith('s3://'):
@@ -73,6 +97,9 @@ class BrainToTextDecoder_Trainer:
             else:
                 os.makedirs(self.args['output_dir'], exist_ok=False)
 
+       
+            
+        
         # Create checkpoint directory (support both local and S3 paths)
         if args['save_best_checkpoint'] or args['save_all_val_steps'] or args['save_final_model']: 
             if self.args['checkpoint_dir'].startswith('s3://'):
@@ -104,6 +131,20 @@ class BrainToTextDecoder_Trainer:
         sh.setFormatter(formatter)
         self.logger.addHandler(sh)
 
+        
+        channel_path = os.environ.get('SM_CHANNEL_TRAINING', None)
+
+        if channel_path is not None:
+            # SageMaker training 채널로 내려온 로컬 경로
+            self.data_base_path = channel_path
+            self.use_s3fs = False
+            self.logger.info(f'Using local channel data path: {self.data_base_path}')
+        else:
+            # 채널이 없으면 S3 경로 사용
+            self.data_base_path = 's3://4k-woody-btt/4k/data/hdf5_data_final'
+            self.use_s3fs = True
+            self.logger.info(f'Using S3 base path: {self.data_base_path}')
+
         # Configure device pytorch will use 
         if torch.cuda.is_available():
             gpu_num = self.args.get('gpu_number', 0)
@@ -130,7 +171,7 @@ class BrainToTextDecoder_Trainer:
             self.device = torch.device("cpu")
 
         self.logger.info(f'Using device: {self.device}')
-        self.logger.info(f'Using S3 base path: {self.s3_base_path}')
+        self.logger.info(f'Using data base path: {self.data_base_path}')
 
         # Set seed if provided 
         if self.args['seed'] != -1:
@@ -184,15 +225,25 @@ class BrainToTextDecoder_Trainer:
         # Use S3 base path instead of local dataset_dir
         # train_file_paths = [os.path.join(self.s3_base_path, s, 'data_train.hdf5') for s in self.args['dataset']['sessions']]
         # val_file_paths = [os.path.join(self.s3_base_path, s, 'data_val.hdf5') for s in self.args['dataset']['sessions']]
+        # train_file_paths = [
+        #     posixpath.join(self.s3_base_path, s, 'data_train.hdf5')
+        #     for s in self.args['dataset']['sessions']
+        # ]
+        # val_file_paths = [
+        #     posixpath.join(self.s3_base_path, s, 'data_val.hdf5')
+        #     for s in self.args['dataset']['sessions']
+        # ]
+
+        # Build file path list(파일 경로 리스트 만들기)
         train_file_paths = [
-            posixpath.join(self.s3_base_path, s, 'data_train.hdf5')
+            os.path.join(self.data_base_path, s, 'data_train.hdf5')
             for s in self.args['dataset']['sessions']
         ]
         val_file_paths = [
-            posixpath.join(self.s3_base_path, s, 'data_val.hdf5')
+            os.path.join(self.data_base_path, s, 'data_val.hdf5')
             for s in self.args['dataset']['sessions']
         ]
-
+        
         self.logger.info(f"Train file paths: {train_file_paths[:3]}...")  # Log first 3 paths
         self.logger.info(f"Val file paths: {val_file_paths[:3]}...")
 
@@ -242,7 +293,8 @@ class BrainToTextDecoder_Trainer:
             batch_size = self.args['dataset']['batch_size'],
             must_include_days = None,
             random_seed = self.args['dataset']['seed'],
-            feature_subset = feature_subset
+            feature_subset = feature_subset,
+            use_s3fs = self.use_s3fs
             )
         self.train_loader = DataLoader(
             self.train_dataset,
@@ -261,7 +313,8 @@ class BrainToTextDecoder_Trainer:
             batch_size = self.args['dataset']['batch_size'],
             must_include_days = None,
             random_seed = self.args['dataset']['seed'],
-            feature_subset = feature_subset   
+            feature_subset = feature_subset,
+            use_s3fs = self.use_s3fs
             )
         self.val_loader = DataLoader(
             self.val_dataset,
@@ -614,7 +667,7 @@ class BrainToTextDecoder_Trainer:
             with torch.autocast(
                 device_type="cuda",
                 enabled=self.args['use_amp'],
-                dtype=torch.bfloat16
+                dtype=_amp_dtype()
             ):
                 # 데이터 증강(data augmentation)
                 features, n_time_steps = self.transform_data(
@@ -819,11 +872,23 @@ class BrainToTextDecoder_Trainer:
                 with torch.autocast(
                     device_type="cuda",
                     enabled=self.args['use_amp'],
-                    dtype=torch.bfloat16
+                    dtype=_amp_dtype()
                 ):
                     features, n_time_steps = self.transform_data(
                         features, n_time_steps, mode='val'
                     )
+                    
+                    # 유효한 타임스텝 길이(adjusted_lens) 계산
+                    # patch_size(패치 크기), patch_stride(패치 stride)를 고려해서
+                    # 실제 GRU input 에 해당하는 길이를 구해줍니다.
+                    if self.args['model']['patch_size'] > 0:
+                        adjusted_lens = (
+                            (n_time_steps - self.args['model']['patch_size'])
+                            // self.args['model']['patch_stride']
+                        ) + 1
+                        adjusted_lens = torch.clamp(adjusted_lens, min=1)
+                    else:
+                        adjusted_lens = n_time_steps
                 
                     # 모델 forward, logits: [B, T, C]
                     logits = self.model(features, day_indicies)

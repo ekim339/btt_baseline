@@ -1,0 +1,10 @@
+boto3
+s3fs
+redis
+editdistance
+tqdm
+omegaconf
+h5py
+numpy
+pandas
+torchaudio

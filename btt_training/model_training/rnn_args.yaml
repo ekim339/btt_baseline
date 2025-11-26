@@ -18,14 +18,14 @@ gpu_number: '0' # GPU number to use for training, formatted as a string (e.g., '
 mode: train
 use_amp: true # whether to use automatic mixed precision (AMP) for training
 
-output_dir: s3://4k-woody-btt/model-yoonho/baseline_rnn # directory to save the trained model and logs
-checkpoint_dir: s3://4k-woody-btt/model-yoonho/checkpoints # directory to save checkpoints during training
+output_dir: s3://4k-woody-btt/model-woody/baseline_rnn # directory to save the trained model and logs
+checkpoint_dir: s3://4k-woody-btt/model-woody/checkpoints # directory to save checkpoints during training
 init_from_checkpoint: false # whether to initialize the model from a checkpoint
 init_checkpoint_path: None # path to the checkpoint to initialize the model from, if any
 save_best_checkpoint: true # whether to save the best checkpoint based on validation metrics
 save_all_val_steps: false # whether to save checkpoints at all validation steps
 save_final_model: false # whether to save the final model after training
-save_val_metrics: true # whether to save validation metrics during training
+save_val_metrics: false # whether to save validation metrics during training # 기존 true
 early_stopping: false # whether to use early stopping based on validation metrics
 early_stopping_val_steps: 20 # number of validation steps to wait before stopping training if no improvement is seen
 
@@ -54,7 +54,7 @@ batches_per_val_step: 2000 # number of batches per validation step
 batches_per_save: 0 # number of batches per save
 log_individual_day_val_PER: true # whether to log individual day validation performance
 log_val_skip_logs: false # whether to skip logging validation metrics
-save_val_logits: true # whether to save validation logits
+save_val_logits: false # whether to save validation logits
 save_val_data: false # whether to save validation data
 
 dataset:
