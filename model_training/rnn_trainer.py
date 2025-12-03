@@ -490,7 +490,18 @@ class BrainToTextDecoder_Trainer:
         self.learning_rate_scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         self.best_val_PER = checkpoint['val_PER'] # best phoneme error rate
         self.best_val_loss = checkpoint['val_loss'] if 'val_loss' in checkpoint.keys() else torch.inf
-        self.global_step = checkpoint.get('global_step', 0) # resume from saved step
+        
+        # Try to get global_step from checkpoint, or infer from scheduler's last_epoch
+        if 'global_step' in checkpoint:
+            self.global_step = checkpoint['global_step']
+        else:
+            # Fallback: use scheduler's last_epoch (which tracks how many times step() was called)
+            # Since we increment global_step at the start of each iteration before training,
+            # we set it to last_epoch so that the first iteration will be last_epoch + 1
+            self.global_step = self.learning_rate_scheduler.last_epoch
+            if self.global_step < 0:
+                self.global_step = 0
+            self.logger.info(f"global_step not found in checkpoint, inferred from scheduler's last_epoch: {self.global_step} (next batch will be {self.global_step + 1})")
 
         self.model.to(self.device)
         
