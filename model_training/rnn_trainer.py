@@ -54,6 +54,7 @@ class BrainToTextDecoder_Trainer:
 
         self.best_val_PER = torch.inf # track best PER for checkpointing
         self.best_val_loss = torch.inf # track best loss for checkpointing
+        self.global_step = 0 # track current training step for checkpoint resumption
 
         self.train_dataset = None 
         self.val_dataset = None 
@@ -489,6 +490,7 @@ class BrainToTextDecoder_Trainer:
         self.learning_rate_scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         self.best_val_PER = checkpoint['val_PER'] # best phoneme error rate
         self.best_val_loss = checkpoint['val_loss'] if 'val_loss' in checkpoint.keys() else torch.inf
+        self.global_step = checkpoint.get('global_step', 0) # resume from saved step
 
         self.model.to(self.device)
         
@@ -498,7 +500,7 @@ class BrainToTextDecoder_Trainer:
                 if isinstance(v, torch.Tensor):
                     state[k] = v.to(self.device)
 
-        self.logger.info("Loaded model from checkpoint: " + load_path)
+        self.logger.info(f"Loaded model from checkpoint: {load_path} (resuming from step {self.global_step})")
 
     def save_model_checkpoint(self, save_path, PER, loss):
         '''
@@ -510,7 +512,8 @@ class BrainToTextDecoder_Trainer:
             'optimizer_state_dict' : self.optimizer.state_dict(),
             'scheduler_state_dict' : self.learning_rate_scheduler.state_dict(),
             'val_PER' : PER,
-            'val_loss' : loss
+            'val_loss' : loss,
+            'global_step' : self.global_step
         }
         
         if save_path.startswith('s3://'):
@@ -656,6 +659,8 @@ class BrainToTextDecoder_Trainer:
 
         # train for specified number of batches
         for i, batch in enumerate(self.train_loader):
+            # Update global step counter
+            self.global_step = self.global_step + 1
             
             self.model.train()
             self.optimizer.zero_grad()
@@ -721,15 +726,15 @@ class BrainToTextDecoder_Trainer:
             train_losses.append(loss.detach().item())
 
             # Incrementally log training progress
-            if i % self.args['batches_per_train_log'] == 0:
-                self.logger.info(f'Train batch {i}: ' +
+            if self.global_step % self.args['batches_per_train_log'] == 0:
+                self.logger.info(f'Train batch {self.global_step}: ' +
                         f'loss: {(loss.detach().item()):.2f} ' +
                         f'grad norm: {grad_norm:.2f} '
                         f'time: {train_step_duration:.3f}')
 
             # Incrementally run a test step
-            if i % self.args['batches_per_val_step'] == 0 or i == ((self.args['num_training_batches'] - 1)):
-                self.logger.info(f"Running test after training batch: {i}")
+            if self.global_step % self.args['batches_per_val_step'] == 0 or self.global_step == self.args['num_training_batches']:
+                self.logger.info(f"Running test after training batch: {self.global_step}")
                 
                 # Calculate metrics on val data
                 start_time = time.time()
@@ -738,7 +743,7 @@ class BrainToTextDecoder_Trainer:
 
 
                 # Log info 
-                self.logger.info(f'Val batch {i}: ' +
+                self.logger.info(f'Val batch {self.global_step}: ' +
                         f'PER (avg): {val_metrics["avg_PER"]:.4f} ' +
                         f'CTC Loss (avg): {val_metrics["avg_loss"]:.4f} ' +
                         f'time: {val_step_duration:.3f}')
@@ -793,16 +798,21 @@ class BrainToTextDecoder_Trainer:
 
                 # Optionally save this validation checkpoint, regardless of performance
                 if self.args['save_all_val_steps']:
-                    self.save_model_checkpoint(f'{self.args["checkpoint_dir"]}/checkpoint_batch_{i}', val_metrics['avg_PER'], val_metrics['avg_loss'])
+                    self.save_model_checkpoint(f'{self.args["checkpoint_dir"]}/checkpoint_batch_{self.global_step}', val_metrics['avg_PER'], val_metrics['avg_loss'])
 
                 # Early stopping 
                 if early_stopping and (val_steps_since_improvement >= early_stopping_val_steps):
-                    self.logger.info(f'Overall validation PER has not improved in {early_stopping_val_steps} validation steps. Stopping training early at batch: {i}')
+                    self.logger.info(f'Overall validation PER has not improved in {early_stopping_val_steps} validation steps. Stopping training early at batch: {self.global_step}')
                     break
 
                 # Periodically upload log to S3
-                if i % (self.args['batches_per_val_step'] * 5) == 0:
+                if self.global_step % (self.args['batches_per_val_step'] * 5) == 0:
                     self.upload_log_to_s3()
+            
+            # Check if we've reached the target number of training batches
+            if self.global_step >= self.args['num_training_batches']:
+                self.logger.info(f'Reached target number of training batches: {self.args["num_training_batches"]}')
+                break
                 
         # Log final training steps 
         training_duration = time.time() - train_start_time
@@ -812,7 +822,7 @@ class BrainToTextDecoder_Trainer:
 
         # Save final model 
         if self.args['save_final_model']:
-            self.save_model_checkpoint(f'{self.args["checkpoint_dir"]}/final_checkpoint_batch_{i}', val_PERs[-1], val_losses[-1])
+            self.save_model_checkpoint(f'{self.args["checkpoint_dir"]}/final_checkpoint_batch_{self.global_step}', val_PERs[-1], val_losses[-1])
 
         # Upload final log to S3
         self.upload_log_to_s3()
