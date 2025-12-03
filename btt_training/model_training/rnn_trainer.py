@@ -284,6 +284,9 @@ class BrainToTextDecoder_Trainer:
             feature_subset = self.args['dataset']['feature_subset']
             self.logger.info(f'Using only a subset of features: {feature_subset}')
             
+        label_type = self.args['dataset'].get('label_type', 'mono')  # 'mono' 또는 'diphone'
+        mono_n_classes = self.args['dataset'].get('mono_n_classes', None)   
+        
         # train dataset and dataloader
         self.train_dataset = BrainToTextDataset(
             trial_indicies = train_trials,
@@ -294,7 +297,9 @@ class BrainToTextDecoder_Trainer:
             must_include_days = None,
             random_seed = self.args['dataset']['seed'],
             feature_subset = feature_subset,
-            use_s3fs = self.use_s3fs
+            use_s3fs = self.use_s3fs,
+            label_type = label_type,
+            mono_n_classes = mono_n_classes,
             )
         self.train_loader = DataLoader(
             self.train_dataset,
@@ -314,7 +319,9 @@ class BrainToTextDecoder_Trainer:
             must_include_days = None,
             random_seed = self.args['dataset']['seed'],
             feature_subset = feature_subset,
-            use_s3fs = self.use_s3fs
+            use_s3fs = self.use_s3fs,
+            label_type = label_type,
+            mono_n_classes = mono_n_classes,
             )
         self.val_loader = DataLoader(
             self.val_dataset,

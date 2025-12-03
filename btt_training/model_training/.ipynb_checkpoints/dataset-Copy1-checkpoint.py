@@ -27,8 +27,6 @@ class BrainToTextDataset(Dataset):
             must_include_days = None,
             feature_subset = None,
             use_s3fs = True,
-            label_type = 'mono',
-            mono_n_classes = None,
             ): 
         '''
         trial_indicies:  (dict)      - dictionary with day numbers as keys and lists of trial indices as values
@@ -67,9 +65,6 @@ class BrainToTextDataset(Dataset):
         self.feature_subset = feature_subset
         self.use_s3fs = use_s3fs
 
-        self.label_type = label_type  # 'mono' or 'diphone'
-        self.mono_n_classes = mono_n_classes
-
         # Calculate total number of trials in the dataset
         for d in trial_indicies:
             self.n_trials += len(trial_indicies[d]['trials'])
@@ -107,6 +102,76 @@ class BrainToTextDataset(Dataset):
         '''
         return self.n_batches
     
+    # def __getitem__(self, idx):
+    #     ''' 
+    #     Gets an entire batch of data from the dataset, not just a single item
+    #     '''
+    #     batch = {
+    #         'input_features' : [],
+    #         'seq_class_ids' : [],
+    #         'n_time_steps' : [],
+    #         'phone_seq_lens' : [],
+    #         'day_indicies' : [],
+    #         'transcriptions' : [],
+    #         'block_nums' : [],
+    #         'trial_nums' : [],
+    #     }
+
+    #     index = self.batch_index[idx]
+
+    #     # Iterate through each day in the index
+    #     for d in index.keys():
+    #         session_path = self.trial_indicies[d]['session_path']
+            
+    #         if not fs.exists(session_path):
+    #             print(f"[WARN] File not found: {session_path}")
+    #             continue
+        
+    #         try:
+    #             # Open the file directly from S3
+    #             with fs.open(session_path, 'rb') as s3_file:
+    #                 with h5py.File(s3_file, 'r') as h5f:
+                        
+    #                     # For each trial in the selected trials for that day
+    #                     for t in index[d]:
+    #                         try:
+    #                             g = h5f[f'trial_{t:04d}']
+        
+    #                             # Load neural data (input features)
+    #                             input_features = torch.from_numpy(g['input_features'][:])
+    #                             if self.feature_subset:
+    #                                 input_features = input_features[:, self.feature_subset]
+    #                             batch['input_features'].append(input_features)
+        
+    #                             # Load labels and attributes
+    #                             batch['seq_class_ids'].append(torch.from_numpy(g['seq_class_ids'][:]))
+    #                             batch['transcriptions'].append(torch.from_numpy(g['transcription'][:]))
+    #                             batch['n_time_steps'].append(g.attrs['n_time_steps'])
+    #                             batch['phone_seq_lens'].append(g.attrs['seq_len'])
+    #                             batch['day_indicies'].append(int(d))
+    #                             batch['block_nums'].append(g.attrs['block_num'])
+    #                             batch['trial_nums'].append(g.attrs['trial_num'])
+        
+    #                         except Exception as e:
+    #                             print(f"[ERROR] Failed trial {t} in {session_path}: {e}")
+    #                             continue
+            
+    #         except Exception as e:
+    #             print(f"[ERROR] Failed to open {session_path}: {e}")
+    #             continue
+
+    #     # Pad data to form a cohesive batch
+    #     batch['input_features'] = pad_sequence(batch['input_features'], batch_first = True, padding_value = 0)
+    #     batch['seq_class_ids'] = pad_sequence(batch['seq_class_ids'], batch_first = True, padding_value = 0)
+
+    #     batch['n_time_steps'] = torch.tensor(batch['n_time_steps']) 
+    #     batch['phone_seq_lens'] = torch.tensor(batch['phone_seq_lens'])
+    #     batch['day_indicies'] = torch.tensor(batch['day_indicies'])
+    #     batch['transcriptions'] = torch.stack(batch['transcriptions'])
+    #     batch['block_nums'] = torch.tensor(batch['block_nums'])
+    #     batch['trial_nums'] = torch.tensor(batch['trial_nums'])
+
+    #     return batch
     def __getitem__(self, idx):
         ''' 
         Gets an entire batch of data from the dataset, not just a single item
@@ -153,50 +218,17 @@ class BrainToTextDataset(Dataset):
                         try:
                             g = h5f[f"trial_{t:04d}"]
 
-                            # 신경 데이터(neural data)
+                            # 신경 데이터(neural data, input_features) 로드
                             input_features = torch.from_numpy(g["input_features"][:])
                             if self.feature_subset is not None:
                                 input_features = input_features[:, self.feature_subset]
                             batch["input_features"].append(input_features)
 
-                            # 원래 mono phoneme(음소, phoneme) 라벨 시퀀스
-                            mono_labels = torch.from_numpy(g["seq_class_ids"][:]).long()
-
-                            #diphone case
-                            if self.label_type == "diphone":
-                                # mono_n_classes: BLANK(0) 포함한 총 mono 클래스 개수, 예를 들어 41
-                                if self.mono_n_classes is None:
-                                    raise ValueError("diphone 모드에서는 mono_n_classes 를 YAML 에 지정해줘야 합니다.")
-
-                                # BLANK(0)은 타깃에서 제거
-                                mono_no_blank = mono_labels[mono_labels != 0]
-                                
-                                # 길이가 1 이하면 diphone 을 만들 수 없으니 일단 빈 시퀀스로 처리
-                                if mono_no_blank.numel() >= 2:
-                                    # non blank 클래스 개수 P (예: 40)
-                                    P = self.mono_n_classes - 1
-                            
-                                    prev = mono_no_blank[:-1]
-                                    nxt  = mono_no_blank[1:]
-                            
-                                    # (prev, next) 쌍을 1..P^2 범위의 id 로 매핑
-                                    # diphone_id = (prev-1) * P + (next-1) + 1
-                                    diphone_ids = (prev - 1) * P + (nxt - 1) + 1
-                                else:
-                                    diphone_ids = mono_no_blank.new_empty((0,), dtype=torch.long)
-                            
-                                labels = diphone_ids
-                                seq_len_val = int(labels.numel())
-                            # mono-phone case
-                            else:
-                                # 기존 mono 그대로 사용
-                                labels = mono_labels
-                                seq_len_val = int(g.attrs["seq_len"])
-                            
-                            batch["seq_class_ids"].append(labels)
+                            # label 과 기타 메타데이터(metadata) 로드
+                            batch["seq_class_ids"].append(torch.from_numpy(g["seq_class_ids"][:]))
                             batch["transcriptions"].append(torch.from_numpy(g["transcription"][:]))
                             batch["n_time_steps"].append(g.attrs["n_time_steps"])
-                            batch["phone_seq_lens"].append(seq_len_val)
+                            batch["phone_seq_lens"].append(g.attrs["seq_len"])
                             batch["day_indicies"].append(int(d))
                             batch["block_nums"].append(g.attrs["block_num"])
                             batch["trial_nums"].append(g.attrs["trial_num"])
