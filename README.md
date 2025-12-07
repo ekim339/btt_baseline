@@ -1,3 +1,31 @@
+```python
+import sagemaker
+from sagemaker.pytorch import PyTorch
+
+estimator = PyTorch(
+    entry_point='train_model.py',                # training file to run
+    source_dir='btt_training/model_training',
+    role = sagemaker.get_execution_role(),                               # 'arn:aws:iam::183295408236:role/service-role/SageMakerExecutionRole'
+    instance_count=1,
+    instance_type='ml.g4dn.16xlarge',      # Instance type for training
+    framework_version='1.9.0',
+    py_version='py38',
+    max_run=259200, # Set max run time to 72 hour (in sec)  **중요**
+    dependencies=['btt_training/model_training/requirements.txt'],
+    base_job_name='btt-woody-training',
+    # hyperparameters={"config": "rnn_args.yaml"},
+    hyperparameters={"config": "rnn_args_diphone.yaml"},
+
+    output_path='s3://4k-woody-btt/model-woody/'
+)
+
+# Fit the estimator to your data / loading data / and runs entry_point file
+estimator.fit({'training': 's3://4k-woody-btt/4k/data/hdf5_data_final'})
+# estimator.fit(wait=False)
+```
+
+
+
 # An Accurate and Rapidly Calibrating Speech Neuroprosthesis
 *The New England Journal of Medicine* (2024)
 
