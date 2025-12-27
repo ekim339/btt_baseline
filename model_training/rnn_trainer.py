@@ -595,9 +595,14 @@ class BrainToTextDecoder_Trainer:
         self.best_val_PER = checkpoint['val_PER'] # best phoneme error rate
         self.best_val_loss = checkpoint['val_loss'] if 'val_loss' in checkpoint.keys() else torch.inf
         
-        # Try to get global_step from checkpoint, or infer from scheduler's last_epoch
+        # Get global_step from checkpoint (batch number)
+        # Check both 'global_step' and 'batch_number' for compatibility
         if 'global_step' in checkpoint:
-            self.global_step = checkpoint['global_step']
+            self.global_step = int(checkpoint['global_step'])
+            self.logger.info(f"Found global_step in checkpoint: {self.global_step}")
+        elif 'batch_number' in checkpoint:
+            self.global_step = int(checkpoint['batch_number'])
+            self.logger.info(f"Found batch_number in checkpoint: {self.global_step}")
         else:
             # Fallback: use scheduler's last_epoch (which tracks how many times step() was called)
             # Since we increment global_step at the start of each iteration before training,
@@ -605,7 +610,21 @@ class BrainToTextDecoder_Trainer:
             self.global_step = self.learning_rate_scheduler.last_epoch
             if self.global_step < 0:
                 self.global_step = 0
-            self.logger.info(f"global_step not found in checkpoint, inferred from scheduler's last_epoch: {self.global_step} (next batch will be {self.global_step + 1})")
+            self.logger.warning(f"global_step/batch_number not found in checkpoint, inferred from scheduler's last_epoch: {self.global_step} (next batch will be {self.global_step + 1})")
+        
+        # Sync scheduler to match global_step
+        # The scheduler's last_epoch should match global_step since we call scheduler.step() after each batch
+        scheduler_last_epoch = self.learning_rate_scheduler.last_epoch
+        if scheduler_last_epoch != self.global_step:
+            self.logger.info(f"Syncing scheduler: last_epoch={scheduler_last_epoch}, global_step={self.global_step}")
+            # Step scheduler to match global_step
+            steps_to_sync = self.global_step - scheduler_last_epoch
+            if steps_to_sync > 0:
+                for _ in range(steps_to_sync):
+                    self.learning_rate_scheduler.step()
+                self.logger.info(f"Stepped scheduler {steps_to_sync} times to sync with global_step")
+            elif steps_to_sync < 0:
+                self.logger.warning(f"Scheduler last_epoch ({scheduler_last_epoch}) is ahead of global_step ({self.global_step}). This may indicate an issue.")
 
         self.model.to(self.device)
         
@@ -615,7 +634,8 @@ class BrainToTextDecoder_Trainer:
                 if isinstance(v, torch.Tensor):
                     state[k] = v.to(self.device)
 
-        self.logger.info(f"Loaded model from checkpoint: {load_path} (resuming from step {self.global_step})")
+        self.logger.info(f"Loaded model from checkpoint: {load_path}")
+        self.logger.info(f"Resuming training from batch/step: {self.global_step} (next batch will be {self.global_step + 1})")
 
     def save_model_checkpoint(self, save_path, PER, loss):
         '''
@@ -628,7 +648,8 @@ class BrainToTextDecoder_Trainer:
             'scheduler_state_dict' : self.learning_rate_scheduler.state_dict(),
             'val_PER' : PER,
             'val_loss' : loss,
-            'global_step' : self.global_step
+            'global_step' : self.global_step,  # Batch number for resuming training
+            'batch_number' : self.global_step,  # Alias for clarity
         }
         
         if save_path.startswith('s3://'):
@@ -771,11 +792,20 @@ class BrainToTextDecoder_Trainer:
         early_stopping_val_steps = self.args['early_stopping_val_steps']
 
         train_start_time = time.time()
+        
+        # Log resumption info if loading from checkpoint
+        if self.global_step > 0:
+            self.logger.info(f"Resuming training from batch {self.global_step}")
+            self.logger.info(f"Will train until batch {self.args['num_training_batches']} (remaining: {self.args['num_training_batches'] - self.global_step} batches)")
 
         # train for specified number of batches
         for i, batch in enumerate(self.train_loader):
             # Update global step counter
             self.global_step = self.global_step + 1
+            
+            # Skip if we've already passed this batch (shouldn't happen, but safety check)
+            if self.global_step > self.args['num_training_batches']:
+                break
             
             self.model.train()
             self.optimizer.zero_grad()
