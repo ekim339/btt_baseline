@@ -348,7 +348,8 @@ class BrainToTextDecoder_Trainer:
             )
         elif self.args['lr_scheduler_type'] == 'cosine':
             self.learning_rate_scheduler = self.create_cosine_lr_scheduler(self.optimizer)
-        
+        elif self.args['lr_scheduler_type'] == 'stepwise':
+            self.learning_rate_scheduler = self.create_stepwise_lr_scheduler(self.optimizer)
         else:
             raise ValueError(f"Invalid learning rate scheduler type: {self.args['lr_scheduler_type']}")
         
@@ -469,6 +470,109 @@ class BrainToTextDecoder_Trainer:
                     lr_min / lr_max, 
                     lr_decay_steps, 
                     lr_warmup_steps), # rest of model weights
+            ]
+        else:
+            raise ValueError(f"Invalid number of param groups in optimizer: {len(optim.param_groups)}")
+        
+        return LambdaLR(optim, lr_lambdas, -1)
+    
+    def create_stepwise_lr_scheduler(self, optim):
+        '''
+        Create a stepwise decay learning rate scheduler
+        
+        Reduces learning rate by gamma at specified milestone steps
+        Supports warmup and separate schedules for day params
+        '''
+        lr_max = self.args['lr_max']
+        lr_min = self.args['lr_min']
+        
+        lr_max_day = self.args['lr_max_day']
+        lr_min_day = self.args['lr_min_day']
+        
+        lr_warmup_steps = self.args['lr_warmup_steps']
+        lr_warmup_steps_day = self.args['lr_warmup_steps_day']
+        
+        # Get stepwise decay parameters
+        # milestones: list of steps at which to decay (e.g., [30000, 60000, 90000])
+        # gamma: factor to multiply LR by at each milestone (e.g., 0.5)
+        milestones = self.args.get('lr_stepwise_milestones', [40000, 80000])
+        gamma = self.args.get('lr_stepwise_gamma', 0.5)
+        
+        # For day params, use separate milestones if specified
+        milestones_day = self.args.get('lr_stepwise_milestones_day', milestones)
+        gamma_day = self.args.get('lr_stepwise_gamma_day', gamma)
+        
+        def lr_lambda(current_step, max_lr, min_lr, milestones_list, gamma_val, warmup_steps):
+            '''
+            Create lr lambda for stepwise decay with warmup
+            
+            Args:
+                current_step: current training step
+                max_lr: maximum learning rate
+                min_lr: minimum learning rate
+                milestones_list: list of steps at which to decay
+                gamma_val: decay factor
+                warmup_steps: number of warmup steps
+            '''
+            # Warmup phase: linearly increase from 0 to max_lr
+            if current_step < warmup_steps:
+                return float(current_step) / float(max(1, warmup_steps))
+            
+            # After warmup: apply stepwise decay
+            current_lr_ratio = 1.0
+            for milestone in sorted(milestones_list):
+                if current_step >= milestone:
+                    current_lr_ratio *= gamma_val
+            
+            # Ensure we don't go below min_lr
+            min_lr_ratio = min_lr / max_lr
+            return max(min_lr_ratio, current_lr_ratio)
+        
+        if len(optim.param_groups) == 3:
+            lr_lambdas = [
+                lambda step: lr_lambda(
+                    step,
+                    lr_max,
+                    lr_min,
+                    milestones,
+                    gamma,
+                    lr_warmup_steps
+                ),  # biases
+                lambda step: lr_lambda(
+                    step,
+                    lr_max_day,
+                    lr_min_day,
+                    milestones_day,
+                    gamma_day,
+                    lr_warmup_steps_day
+                ),  # day params
+                lambda step: lr_lambda(
+                    step,
+                    lr_max,
+                    lr_min,
+                    milestones,
+                    gamma,
+                    lr_warmup_steps
+                ),  # rest of model weights
+            ]
+        elif len(optim.param_groups) == 2:
+            lr_lambdas = [
+                lambda step: lr_lambda(
+                    step,
+                    lr_max,
+                    lr_min,
+                    milestones,
+                    gamma,
+                    lr_warmup_steps
+                ),  # biases
+                lambda step: lr_lambda(
+                    step,
+                    lr_max,
+                    lr_min,
+                    milestones,
+                    gamma,
+                    lr_warmup_steps
+                ),  # rest of model weights
             ]
         else:
             raise ValueError(f"Invalid number of param groups in optimizer: {len(optim.param_groups)}")
@@ -756,12 +860,15 @@ class BrainToTextDecoder_Trainer:
                 # Log info 
                 self.logger.info(f'Val batch {self.global_step}: ' +
                         f'PER (avg): {val_metrics["avg_PER"]:.4f} ' +
+                        f'DER (avg): {val_metrics["avg_DER"]:.4f} ' +
                         f'CTC Loss (avg): {val_metrics["avg_loss"]:.4f} ' +
                         f'time: {val_step_duration:.3f}')
                 
                 if self.args['log_individual_day_val_PER']:
                     for day in val_metrics['day_PERs'].keys():
-                        self.logger.info(f"{self.args['dataset']['sessions'][day]} val PER: {val_metrics['day_PERs'][day]['total_edit_distance'] / val_metrics['day_PERs'][day]['total_seq_length']:0.4f}")
+                        day_per = val_metrics['day_PERs'][day]['total_edit_distance'] / val_metrics['day_PERs'][day]['total_seq_length']
+                        day_der = val_metrics['day_DERs'][day]['total_edit_distance'] / val_metrics['day_DERs'][day]['total_seq_length']
+                        self.logger.info(f"{self.args['dataset']['sessions'][day]} val PER: {day_per:.4f} DER: {day_der:.4f}")
 
                 # Save metrics 
                 val_PERs.append(val_metrics['avg_PER'])
@@ -873,12 +980,28 @@ class BrainToTextDecoder_Trainer:
 
         total_edit_distance = 0
         total_seq_length = 0
+        
+        # For DER calculation (diphone error rate)
+        total_diphone_edit_distance = 0
+        total_diphone_seq_length = 0
 
         # Calculate PER for each specific day
         day_per = {}
+        day_der = {}  # For diphone error rate per day
         for d in range(len(self.args['dataset']['sessions'])):
             if self.args['dataset']['dataset_probability_val'][d] == 1: 
                 day_per[d] = {'total_edit_distance' : 0, 'total_seq_length' : 0}
+                day_der[d] = {'total_edit_distance' : 0, 'total_seq_length' : 0}
+        
+        # Check if we're using diphone labels
+        label_type = self.args['dataset'].get('label_type', 'mono')
+        is_diphone = (label_type == 'diphone')
+        mono_n_classes = self.args['dataset'].get('mono_n_classes', None)
+        
+        # Store label type for use in validation loop
+        self._validation_label_type = label_type
+        self._validation_is_diphone = is_diphone
+        self._validation_mono_n_classes = mono_n_classes
 
         for i, batch in enumerate(loader):        
 
@@ -940,8 +1063,9 @@ class BrainToTextDecoder_Trainer:
 
                 metrics['losses'].append(loss.cpu().detach().numpy())
 
-                # Calculate PER per day and also avg over entire validation set
+                # Calculate PER and DER per day and also avg over entire validation set
                 batch_edit_distance = 0 
+                batch_diphone_edit_distance = 0
                 decoded_seqs = []
                 for iterIdx in range(logits.shape[0]):
                     decoded_seq = torch.argmax(logits[iterIdx, 0 : adjusted_lens[iterIdx], :].clone().detach(),dim=-1)
@@ -953,7 +1077,23 @@ class BrainToTextDecoder_Trainer:
                         labels[iterIdx][0 : phone_seq_lens[iterIdx]].cpu().detach()
                     )
             
-                    batch_edit_distance += F.edit_distance(decoded_seq, trueSeq)
+                    # Calculate edit distance
+                    # For diphone models: this is DER (diphone error rate)
+                    # For mono models: this is PER (phoneme error rate)
+                    edit_dist = F.edit_distance(decoded_seq, trueSeq)
+                    
+                    if is_diphone:
+                        # For diphone models: edit distance on diphones = DER
+                        batch_diphone_edit_distance += edit_dist
+                        # PER would require converting diphones back to phonemes
+                        # For now, we'll use the same value (can be improved later)
+                        batch_edit_distance += edit_dist
+                    else:
+                        # For mono models: edit distance on phonemes = PER
+                        batch_edit_distance += edit_dist
+                        # DER would require converting phonemes to diphones
+                        # For simplicity, use same value (DER = PER for mono models)
+                        batch_diphone_edit_distance += edit_dist
 
                     decoded_seqs.append(decoded_seq)
 
@@ -961,9 +1101,15 @@ class BrainToTextDecoder_Trainer:
                 
             day_per[day]['total_edit_distance'] += batch_edit_distance
             day_per[day]['total_seq_length'] += torch.sum(phone_seq_lens).item()
+            
+            day_der[day]['total_edit_distance'] += batch_diphone_edit_distance
+            day_der[day]['total_seq_length'] += torch.sum(phone_seq_lens).item()
 
             total_edit_distance += batch_edit_distance
             total_seq_length += torch.sum(phone_seq_lens)
+            
+            total_diphone_edit_distance += batch_diphone_edit_distance
+            total_diphone_seq_length += torch.sum(phone_seq_lens)
 
             # Record metrics
             if return_logits: 
@@ -983,9 +1129,12 @@ class BrainToTextDecoder_Trainer:
             metrics['day_indicies'].append(batch['day_indicies'].cpu().numpy())
 
         avg_PER = total_edit_distance / total_seq_length
+        avg_DER = total_diphone_edit_distance / total_diphone_seq_length if total_diphone_seq_length > 0 else 0.0
 
         metrics['day_PERs'] = day_per
+        metrics['day_DERs'] = day_der
         metrics['avg_PER'] = avg_PER.item()
+        metrics['avg_DER'] = avg_DER.item() if isinstance(avg_DER, torch.Tensor) else avg_DER
         metrics['avg_loss'] = np.mean(metrics['losses'])
 
         return metrics

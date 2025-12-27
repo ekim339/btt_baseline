@@ -1,7 +1,7 @@
 model:
   n_input_features: 512 # number of input features in the neural data. (2 features per electrode, 256 electrodes)
   n_units: 768 # number of units per GRU layer
-  rnn_dropout: 0.4 # dropout rate for the GRU layers
+  rnn_dropout: 0.3 # dropout rate for the GRU layers
   rnn_trainable: true # whether the GRU layers are trainable
   n_layers: 5 # number of GRU layers
   patch_size: 14 # size of the input patches (14 time steps)
@@ -12,7 +12,7 @@ model:
     input_layer_sizes:
     - 512 # size of the input layer (number of input features)
     input_trainable: true # whether the input layer is trainable
-    input_layer_dropout: 0.2 # dropout rate for the input layer
+    input_layer_dropout: 0.3 # dropout rate for the input layer
 
 gpu_number: '0' # GPU number to use for training, formatted as a string (e.g., '0', '1', etc.)
 mode: train
@@ -30,15 +30,21 @@ early_stopping: false # whether to use early stopping based on validation metric
 early_stopping_val_steps: 20 # number of validation steps to wait before stopping training if no improvement is seen
 
 num_training_batches: 120000 # number of training batches to run
-lr_scheduler_type: linear # type of learning rate scheduler to use
+lr_scheduler_type: stepwise # type of learning rate scheduler to use (linear, cosine, or stepwise)
 lr_max: 0.005 # maximum learning rate for the main model
 lr_min: 0.0001 # minimum learning rate for the main model
-lr_decay_steps: 120000 # number of steps for the learning rate decay
+lr_decay_steps: 120000 # number of steps for the learning rate decay (used for linear/cosine)
 lr_warmup_steps: 1000 # number of warmup steps for the learning rate scheduler
 lr_max_day: 0.005 # maximum learning rate for the day specific input layers
 lr_min_day: 0.0001 # minimum learning rate for the day specific input layers
-lr_decay_steps_day: 120000 # number of steps for the learning rate decay for the day specific input layers
+lr_decay_steps_day: 120000 # number of steps for the learning rate decay for the day specific input layers (used for linear/cosine)
 lr_warmup_steps_day: 1000 # number of warmup steps for the learning rate scheduler for the day specific input layers
+
+# Stepwise decay parameters (only used when lr_scheduler_type: stepwise)
+lr_stepwise_milestones: [40000, 80000] # list of steps at which to decay learning rate
+lr_stepwise_gamma: 0.5 # factor to multiply learning rate by at each milestone
+lr_stepwise_milestones_day: [40000, 80000] # milestones for day-specific layers (defaults to same as main if not specified)
+lr_stepwise_gamma_day: 0.5 # gamma for day-specific layers (defaults to same as main if not specified)
 
 beta0: 0.9 # beta0 parameter for the Adam optimizer
 beta1: 0.999 # beta1 parameter for the Adam optimizer
