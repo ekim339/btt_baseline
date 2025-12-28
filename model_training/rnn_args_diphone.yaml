@@ -22,6 +22,7 @@ use_amp: true # whether to use automatic mixed precision (AMP) for training
 output_dir: s3://4k-woody-btt/model-woody/diphone_rnn # directory for diphone
 # checkpoint_dir: s3://4k-woody-btt/model-woody/checkpoints # directory to save checkpoints during training
 checkpoint_dir: s3://4k-woody-btt/model-woody/checkpoints_diphone # directory to save checkpoints during training
+checkpoint_suffix: null # optional suffix to append to checkpoint_dir (e.g., "job1", "20240115", or null to use base directory)
 init_from_checkpoint: true # whether to initialize the model from a checkpoint
 init_checkpoint_path: s3://4k-woody-btt/model-woody/checkpoints_diphone/best_checkpoint # path to the checkpoint to initialize the model from, if any
 save_best_checkpoint: true # whether to save the best checkpoint based on validation metrics

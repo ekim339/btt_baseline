@@ -114,8 +114,10 @@ class BrainToTextDataset(Dataset):
         batch = {
             'input_features' : [],
             'seq_class_ids' : [],
+            'mono_seq_class_ids' : [],  # Original phoneme labels (for PER calculation)
             'n_time_steps' : [],
             'phone_seq_lens' : [],
+            'mono_seq_len' : [],  # Original phoneme sequence length
             'day_indicies' : [],
             'transcriptions' : [],
             'block_nums' : [],
@@ -168,6 +170,10 @@ class BrainToTextDataset(Dataset):
                                 if self.mono_n_classes is None:
                                     raise ValueError("diphone 모드에서는 mono_n_classes 를 YAML 에 지정해줘야 합니다.")
 
+                                # Store original mono labels for PER calculation
+                                batch["mono_seq_class_ids"].append(mono_labels)
+                                batch["mono_seq_len"].append(int(g.attrs["seq_len"]))
+
                                 # BLANK(0)은 타깃에서 제거
                                 mono_no_blank = mono_labels[mono_labels != 0]
                                 
@@ -192,6 +198,9 @@ class BrainToTextDataset(Dataset):
                                 # 기존 mono 그대로 사용
                                 labels = mono_labels
                                 seq_len_val = int(g.attrs["seq_len"])
+                                # For mono models, mono labels are same as labels
+                                batch["mono_seq_class_ids"].append(mono_labels)
+                                batch["mono_seq_len"].append(seq_len_val)
                             
                             batch["seq_class_ids"].append(labels)
                             batch["transcriptions"].append(torch.from_numpy(g["transcription"][:]))
@@ -220,9 +229,16 @@ class BrainToTextDataset(Dataset):
             batch_first = True,
             padding_value = 0,
         )
+        
+        batch['mono_seq_class_ids'] = pad_sequence(
+            batch['mono_seq_class_ids'],
+            batch_first = True,
+            padding_value = 0,
+        )
 
         batch['n_time_steps'] = torch.tensor(batch['n_time_steps'])
         batch['phone_seq_lens'] = torch.tensor(batch['phone_seq_lens'])
+        batch['mono_seq_len'] = torch.tensor(batch['mono_seq_len'])
         batch['day_indicies'] = torch.tensor(batch['day_indicies'])
         batch['transcriptions'] = torch.stack(batch['transcriptions'])
         batch['block_nums'] = torch.tensor(batch['block_nums'])

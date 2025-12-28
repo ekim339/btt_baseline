@@ -21,6 +21,13 @@ from data_augmentations import gauss_smooth
 import torchaudio.functional as F # for edit distance
 from omegaconf import OmegaConf
 
+# Import diphone marginalization for PER calculation
+try:
+    from diphone_to_phoneme_marginalization import marginalize_diphone_logits_vectorized
+except ImportError:
+    marginalize_diphone_logits_vectorized = None
+    print("Warning: diphone_to_phoneme_marginalization module not found. PER calculation for diphone models may not work correctly.")
+
 torch.set_float32_matmul_precision('high') # makes float32 matmuls faster on some GPUs
 torch.backends.cudnn.deterministic = True # makes training more reproducible
 torch._dynamo.config.cache_size_limit = 64
@@ -103,10 +110,20 @@ class BrainToTextDecoder_Trainer:
         
         # Create checkpoint directory (support both local and S3 paths)
         if args['save_best_checkpoint'] or args['save_all_val_steps'] or args['save_final_model']: 
+            # Add unique identifier to checkpoint directory if specified
+            checkpoint_suffix = self.args.get('checkpoint_suffix', None)
+            if checkpoint_suffix:
+                # Append suffix to checkpoint_dir (e.g., for job names, timestamps, etc.)
+                if self.args['checkpoint_dir'].endswith('/'):
+                    self.args['checkpoint_dir'] = self.args['checkpoint_dir'] + checkpoint_suffix
+                else:
+                    self.args['checkpoint_dir'] = self.args['checkpoint_dir'] + '/' + checkpoint_suffix
+                self.logger.info(f"Using checkpoint directory with suffix: {self.args['checkpoint_dir']}")
+            
             if self.args['checkpoint_dir'].startswith('s3://'):
-                self.s3.makedirs(self.args['checkpoint_dir'], exist_ok=False)
+                self.s3.makedirs(self.args['checkpoint_dir'], exist_ok=True)  # Changed to exist_ok=True to allow resuming
             else:
-                os.makedirs(self.args['checkpoint_dir'], exist_ok=False)
+                os.makedirs(self.args['checkpoint_dir'], exist_ok=True)  # Changed to exist_ok=True to allow resuming
 
         # Set up logging
         self.logger = logging.getLogger(__name__)
@@ -999,14 +1016,24 @@ class BrainToTextDecoder_Trainer:
         if return_data: 
             metrics['input_features'] = []
 
+        # Check if we're using diphone labels (needed for initialization)
+        label_type = self.args['dataset'].get('label_type', 'mono')
+        is_diphone = (label_type == 'diphone')
+        mono_n_classes = self.args['dataset'].get('mono_n_classes', None)
+        
         metrics['decoded_seqs'] = []
         metrics['true_seq'] = []
         metrics['phone_seq_lens'] = []
+        metrics['mono_seq_lens'] = []  # Original phoneme sequence lengths
         metrics['transcription'] = []
         metrics['losses'] = []
         metrics['block_nums'] = []
         metrics['trial_nums'] = []
         metrics['day_indicies'] = []
+        
+        # For diphone models, also store true phoneme sequences separately
+        if is_diphone:
+            metrics['true_phoneme_seq'] = []
 
         total_edit_distance = 0
         total_seq_length = 0
@@ -1023,11 +1050,6 @@ class BrainToTextDecoder_Trainer:
                 day_per[d] = {'total_edit_distance' : 0, 'total_seq_length' : 0}
                 day_der[d] = {'total_edit_distance' : 0, 'total_seq_length' : 0}
         
-        # Check if we're using diphone labels
-        label_type = self.args['dataset'].get('label_type', 'mono')
-        is_diphone = (label_type == 'diphone')
-        mono_n_classes = self.args['dataset'].get('mono_n_classes', None)
-        
         # Store label type for use in validation loop
         self._validation_label_type = label_type
         self._validation_is_diphone = is_diphone
@@ -1040,6 +1062,17 @@ class BrainToTextDecoder_Trainer:
             n_time_steps = batch['n_time_steps'].to(self.device)
             phone_seq_lens = batch['phone_seq_lens'].to(self.device)
             day_indicies = batch['day_indicies'].to(self.device)
+            
+            # Get ground truth phoneme labels (for PER calculation)
+            if 'mono_seq_class_ids' in batch:
+                mono_labels = batch['mono_seq_class_ids'].to(self.device)
+                mono_seq_lens = batch['mono_seq_len'].to(self.device)
+            else:
+                # Fallback: if mono labels not available, use labels (for mono models or old checkpoints)
+                if is_diphone:
+                    self.logger.warning("mono_seq_class_ids not found in batch. PER calculation may be incorrect for diphone models.")
+                mono_labels = labels
+                mono_seq_lens = phone_seq_lens
 
             # Determine if we should perform validation on this batch
             day = day_indicies[0].item()
@@ -1093,53 +1126,88 @@ class BrainToTextDecoder_Trainer:
 
                 metrics['losses'].append(loss.cpu().detach().numpy())
 
-                # Calculate PER and DER per day and also avg over entire validation set
-                batch_edit_distance = 0 
-                batch_diphone_edit_distance = 0
-                decoded_seqs = []
-                for iterIdx in range(logits.shape[0]):
-                    decoded_seq = torch.argmax(logits[iterIdx, 0 : adjusted_lens[iterIdx], :].clone().detach(),dim=-1)
-                    decoded_seq = torch.unique_consecutive(decoded_seq, dim=-1)
-                    decoded_seq = decoded_seq.cpu().detach().numpy()
-                    decoded_seq = np.array([i for i in decoded_seq if i != 0])
-
-                    trueSeq = np.array(
-                        labels[iterIdx][0 : phone_seq_lens[iterIdx]].cpu().detach()
+                # Marginalize diphone logits to phoneme logits if using diphone model
+                if is_diphone and mono_n_classes is not None and marginalize_diphone_logits_vectorized is not None:
+                    # Marginalize diphone logits to phoneme logits for PER calculation
+                    # logits shape: [B, T, n_diphone_classes]
+                    phoneme_logits = marginalize_diphone_logits_vectorized(
+                        logits.detach(),
+                        mono_n_classes=mono_n_classes,
+                        use_log_space=True
                     )
-            
-                    # Calculate edit distance
-                    # For diphone models: this is DER (diphone error rate)
-                    # For mono models: this is PER (phoneme error rate)
-                    edit_dist = F.edit_distance(decoded_seq, trueSeq)
-                    
-                    if is_diphone:
-                        # For diphone models: edit distance on diphones = DER
-                        batch_diphone_edit_distance += edit_dist
-                        # PER would require converting diphones back to phonemes
-                        # For now, we'll use the same value (can be improved later)
-                        batch_edit_distance += edit_dist
-                    else:
-                        # For mono models: edit distance on phonemes = PER
-                        batch_edit_distance += edit_dist
-                        # DER would require converting phonemes to diphones
-                        # For simplicity, use same value (DER = PER for mono models)
-                        batch_diphone_edit_distance += edit_dist
+                    # phoneme_logits shape: [B, T, mono_n_classes]
+                else:
+                    # For mono models, logits are already phoneme logits
+                    phoneme_logits = logits.detach()
 
-                    decoded_seqs.append(decoded_seq)
+                # Calculate PER and DER per day and also avg over entire validation set
+                batch_edit_distance = 0  # PER (phoneme error rate)
+                batch_diphone_edit_distance = 0  # DER (diphone error rate)
+                decoded_seqs = []
+                decoded_phoneme_seqs = []
+                
+                for iterIdx in range(logits.shape[0]):
+                    # For DER: decode diphone sequence directly from diphone logits
+                    if is_diphone:
+                        diphone_decoded_seq = torch.argmax(logits[iterIdx, 0 : adjusted_lens[iterIdx], :].clone().detach(), dim=-1)
+                        diphone_decoded_seq = torch.unique_consecutive(diphone_decoded_seq, dim=-1)
+                        diphone_decoded_seq = diphone_decoded_seq.cpu().detach().numpy()
+                        diphone_decoded_seq = np.array([i for i in diphone_decoded_seq if i != 0])
+                        
+                        # Ground truth diphone sequence
+                        true_diphone_seq = np.array(
+                            labels[iterIdx][0 : phone_seq_lens[iterIdx]].cpu().detach()
+                        )
+                        
+                        # Calculate DER (diphone error rate)
+                        der_edit_dist = F.edit_distance(diphone_decoded_seq, true_diphone_seq)
+                        batch_diphone_edit_distance += der_edit_dist
+                        
+                        decoded_seqs.append(diphone_decoded_seq)
+                    
+                    # For PER: decode phoneme sequence from marginalized phoneme logits
+                    phoneme_decoded_seq = torch.argmax(phoneme_logits[iterIdx, 0 : adjusted_lens[iterIdx], :].clone().detach(), dim=-1)
+                    phoneme_decoded_seq = torch.unique_consecutive(phoneme_decoded_seq, dim=-1)
+                    phoneme_decoded_seq = phoneme_decoded_seq.cpu().detach().numpy()
+                    phoneme_decoded_seq = np.array([i for i in phoneme_decoded_seq if i != 0])
+                    
+                    # Ground truth phoneme sequence
+                    true_phoneme_seq = np.array(
+                        mono_labels[iterIdx][0 : mono_seq_lens[iterIdx]].cpu().detach()
+                    )
+                    
+                    # Calculate PER (phoneme error rate)
+                    per_edit_dist = F.edit_distance(phoneme_decoded_seq, true_phoneme_seq)
+                    batch_edit_distance += per_edit_dist
+                    
+                    decoded_phoneme_seqs.append(phoneme_decoded_seq)
+                    
+                    # For mono models, DER = PER (same sequences)
+                    if not is_diphone:
+                        batch_diphone_edit_distance += per_edit_dist
+                        decoded_seqs.append(phoneme_decoded_seq)
 
             day = batch['day_indicies'][0].item()
                 
+            # PER uses phoneme sequence lengths
             day_per[day]['total_edit_distance'] += batch_edit_distance
-            day_per[day]['total_seq_length'] += torch.sum(phone_seq_lens).item()
+            day_per[day]['total_seq_length'] += torch.sum(mono_seq_lens).item()
             
+            # DER uses diphone sequence lengths (or phoneme for mono models)
             day_der[day]['total_edit_distance'] += batch_diphone_edit_distance
-            day_der[day]['total_seq_length'] += torch.sum(phone_seq_lens).item()
+            if is_diphone:
+                day_der[day]['total_seq_length'] += torch.sum(phone_seq_lens).item()
+            else:
+                day_der[day]['total_seq_length'] += torch.sum(mono_seq_lens).item()
 
             total_edit_distance += batch_edit_distance
-            total_seq_length += torch.sum(phone_seq_lens)
+            total_seq_length += torch.sum(mono_seq_lens)
             
             total_diphone_edit_distance += batch_diphone_edit_distance
-            total_diphone_seq_length += torch.sum(phone_seq_lens)
+            if is_diphone:
+                total_diphone_seq_length += torch.sum(phone_seq_lens)
+            else:
+                total_diphone_seq_length += torch.sum(mono_seq_lens)
 
             # Record metrics
             if return_logits: 
@@ -1149,9 +1217,21 @@ class BrainToTextDecoder_Trainer:
             if return_data: 
                 metrics['input_features'].append(batch['input_features'].cpu().numpy()) 
 
-            metrics['decoded_seqs'].append(decoded_seqs)
-            metrics['true_seq'].append(batch['seq_class_ids'].cpu().numpy())
+            # Store decoded sequences
+            if is_diphone:
+                metrics['decoded_seqs'].append(decoded_seqs)  # Diphone sequences for DER
+            else:
+                metrics['decoded_seqs'].append(decoded_phoneme_seqs)  # Phoneme sequences
+            
+            # Store true sequences
+            if is_diphone:
+                metrics['true_seq'].append(batch['seq_class_ids'].cpu().numpy())  # True diphone sequences
+                metrics['true_phoneme_seq'].append(batch['mono_seq_class_ids'].cpu().numpy())  # True phoneme sequences
+            else:
+                metrics['true_seq'].append(batch['seq_class_ids'].cpu().numpy())  # True phoneme sequences
+            
             metrics['phone_seq_lens'].append(batch['phone_seq_lens'].cpu().numpy())
+            metrics['mono_seq_lens'].append(batch['mono_seq_len'].cpu().numpy())
             metrics['transcription'].append(batch['transcriptions'].cpu().numpy())
             metrics['losses'].append(loss.detach().item())
             metrics['block_nums'].append(batch['block_nums'].numpy())
