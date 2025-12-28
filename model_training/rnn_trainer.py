@@ -121,9 +121,11 @@ class BrainToTextDecoder_Trainer:
         # Create output directory (support both local and S3 paths)
         if args['mode'] == 'train':
             if self.args['output_dir'].startswith('s3://'):
-                self.s3.makedirs(self.args['output_dir'], exist_ok=False)
+                self.s3.makedirs(self.args['output_dir'], exist_ok=True)  # Use exist_ok=True for S3
             else:
-                os.makedirs(self.args['output_dir'], exist_ok=False)
+                # On SageMaker, directories already exist, so use exist_ok=True
+                # For local runs, exist_ok=True is safe (won't error if exists, will create if not)
+                os.makedirs(self.args['output_dir'], exist_ok=True)
 
        
             
