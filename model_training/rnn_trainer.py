@@ -111,47 +111,29 @@ class BrainToTextDecoder_Trainer:
         sh.setFormatter(formatter)
         self.logger.addHandler(sh)
         
-        # Check if running on SageMaker (use job-specific output directory)
-        sm_output_dir = os.environ.get('SM_OUTPUT_DIR', None)
-        if sm_output_dir:
-            # SageMaker creates a job-specific folder, use it for output_dir
-            self.args['output_dir'] = sm_output_dir
-            self.logger.info(f"Running on SageMaker, using SM_OUTPUT_DIR: {sm_output_dir}")
-        
         # Create output directory (support both local and S3 paths)
         if args['mode'] == 'train':
             if self.args['output_dir'].startswith('s3://'):
-                self.s3.makedirs(self.args['output_dir'], exist_ok=True)  # Use exist_ok=True for S3
+                self.s3.makedirs(self.args['output_dir'], exist_ok=True)
             else:
-                # On SageMaker, directories already exist, so use exist_ok=True
-                # For local runs, exist_ok=True is safe (won't error if exists, will create if not)
                 os.makedirs(self.args['output_dir'], exist_ok=True)
 
-       
-            
-        
         # Create checkpoint directory (support both local and S3 paths)
-        # Always set checkpoint_dir (even if not saving checkpoints, it might be needed for loading)
-        if sm_output_dir:
-            # Use SageMaker job-specific output directory directly
-            checkpoint_dir = sm_output_dir
-            self.logger.info(f"Using SageMaker job output directory for checkpoints: {checkpoint_dir}")
-        else:
-            # Use configured checkpoint_dir or fallback to output_dir/checkpoints
+        if args['save_best_checkpoint'] or args['save_all_val_steps'] or args['save_final_model']: 
+            # Use checkpoint_dir from config, or fallback to output_dir/checkpoints if not specified
             checkpoint_dir = self.args.get('checkpoint_dir', None)
             if checkpoint_dir is None or checkpoint_dir == '':
                 checkpoint_dir = os.path.join(self.args['output_dir'], 'checkpoints')
                 self.logger.info(f"checkpoint_dir not specified, using output_dir/checkpoints: {checkpoint_dir}")
-        
-        # Always set checkpoint_dir in args (needed for checkpoint saving/loading)
-        self.args['checkpoint_dir'] = checkpoint_dir
-        
-        # Create directory if we're saving checkpoints
-        if args['save_best_checkpoint'] or args['save_all_val_steps'] or args['save_final_model']: 
-            if checkpoint_dir.startswith('s3://'):
-                self.s3.makedirs(checkpoint_dir, exist_ok=True)  # Changed to exist_ok=True to allow resuming
             else:
-                os.makedirs(checkpoint_dir, exist_ok=True)  # Changed to exist_ok=True to allow resuming
+                self.logger.info(f"Using checkpoint_dir from config: {checkpoint_dir}")
+            
+            self.args['checkpoint_dir'] = checkpoint_dir
+            
+            if checkpoint_dir.startswith('s3://'):
+                self.s3.makedirs(checkpoint_dir, exist_ok=True)
+            else:
+                os.makedirs(checkpoint_dir, exist_ok=True)
 
         # Set up file logging (if training mode)
         if args['mode']=='train':

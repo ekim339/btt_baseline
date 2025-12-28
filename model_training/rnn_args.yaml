@@ -19,7 +19,7 @@ mode: train
 use_amp: true # whether to use automatic mixed precision (AMP) for training
 
 output_dir: s3://4k-eugene-btt/baseline_rnn # directory to save the trained model and logs
-# checkpoint_dir: s3://4k-eugene-btt/baseline_rnn/checkpoints # directory to save checkpoints during training
+checkpoint_dir: s3://4k-eugene-btt/baseline_rnn/checkpoint_stepwise # directory to save checkpoints during training
 # checkpoint_suffix: stepwise1 # optional suffix to append to checkpoint_dir (e.g., "job1", "20240115", or null to use base directory)
 init_from_checkpoint: false # whether to initialize the model from a checkpoint
 init_checkpoint_path: None # path to the checkpoint to initialize the model from, if any
