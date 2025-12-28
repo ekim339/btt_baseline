@@ -131,21 +131,23 @@ class BrainToTextDecoder_Trainer:
             
         
         # Create checkpoint directory (support both local and S3 paths)
+        # Always set checkpoint_dir (even if not saving checkpoints, it might be needed for loading)
+        if sm_output_dir:
+            # Use SageMaker job-specific output directory directly
+            checkpoint_dir = sm_output_dir
+            self.logger.info(f"Using SageMaker job output directory for checkpoints: {checkpoint_dir}")
+        else:
+            # Use configured checkpoint_dir or fallback to output_dir/checkpoints
+            checkpoint_dir = self.args.get('checkpoint_dir', None)
+            if checkpoint_dir is None or checkpoint_dir == '':
+                checkpoint_dir = os.path.join(self.args['output_dir'], 'checkpoints')
+                self.logger.info(f"checkpoint_dir not specified, using output_dir/checkpoints: {checkpoint_dir}")
+        
+        # Always set checkpoint_dir in args (needed for checkpoint saving/loading)
+        self.args['checkpoint_dir'] = checkpoint_dir
+        
+        # Create directory if we're saving checkpoints
         if args['save_best_checkpoint'] or args['save_all_val_steps'] or args['save_final_model']: 
-            # If running on SageMaker, store checkpoints directly under the job output directory
-            if sm_output_dir:
-                # Use SageMaker job-specific output directory directly
-                checkpoint_dir = sm_output_dir
-                self.logger.info(f"Using SageMaker job output directory for checkpoints: {checkpoint_dir}")
-            else:
-                # Use configured checkpoint_dir or fallback to output_dir/checkpoints
-                checkpoint_dir = self.args.get('checkpoint_dir', None)
-                if checkpoint_dir is None or checkpoint_dir == '':
-                    checkpoint_dir = os.path.join(self.args['output_dir'], 'checkpoints')
-                    self.logger.info(f"checkpoint_dir not specified, using output_dir/checkpoints: {checkpoint_dir}")
-            
-            self.args['checkpoint_dir'] = checkpoint_dir
-            
             if checkpoint_dir.startswith('s3://'):
                 self.s3.makedirs(checkpoint_dir, exist_ok=True)  # Changed to exist_ok=True to allow resuming
             else:
