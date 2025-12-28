@@ -21,8 +21,7 @@ use_amp: true # whether to use automatic mixed precision (AMP) for training
 # output_dir: s3://4k-woody-btt/model-woody/baseline_rnn # directory to save the trained model and logs
 output_dir: s3://4k-woody-btt/model-woody/diphone_rnn # directory for diphone
 # checkpoint_dir: s3://4k-woody-btt/model-woody/checkpoints # directory to save checkpoints during training
-checkpoint_dir: s3://4k-woody-btt/model-woody/checkpoints_diphone # directory to save checkpoints during training
-checkpoint_suffix: null # optional suffix to append to checkpoint_dir (e.g., "job1", "20240115", or null to use base directory)
+# checkpoint_suffix: null # optional suffix to append to checkpoint_dir (e.g., "job1", "20240115", or null to use base directory)
 init_from_checkpoint: true # whether to initialize the model from a checkpoint
 init_checkpoint_path: s3://4k-woody-btt/model-woody/checkpoints_diphone/best_checkpoint # path to the checkpoint to initialize the model from, if any
 save_best_checkpoint: true # whether to save the best checkpoint based on validation metrics
@@ -44,10 +43,10 @@ lr_decay_steps_day: 120000 # number of steps for the learning rate decay for the
 lr_warmup_steps_day: 1000 # number of warmup steps for the learning rate scheduler for the day specific input layers
 
 # Stepwise decay parameters (only used when lr_scheduler_type: stepwise)
-lr_stepwise_milestones: [40000, 80000] # list of steps at which to decay learning rate
-lr_stepwise_gamma: 0.5 # factor to multiply learning rate by at each milestone
-lr_stepwise_milestones_day: [40000, 80000] # milestones for day-specific layers (defaults to same as main if not specified)
-lr_stepwise_gamma_day: 0.5 # gamma for day-specific layers (defaults to same as main if not specified)
+lr_stepwise_milestones: [15000, 30000, 45000, 60000, 75000, 90000] # list of steps at which to decay learning rate
+lr_stepwise_gamma: 0.75 # factor to multiply learning rate by at each milestone
+lr_stepwise_milestones_day: [15000, 30000, 45000, 60000, 75000, 90000]  # milestones for day-specific layers (defaults to same as main if not specified)
+lr_stepwise_gamma_day: 0.75 # gamma for day-specific layers (defaults to same as main if not specified)
 
 beta0: 0.9 # beta0 parameter for the Adam optimizer
 beta1: 0.999 # beta1 parameter for the Adam optimizer

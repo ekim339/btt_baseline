@@ -98,6 +98,26 @@ class BrainToTextDecoder_Trainer:
 
 
         self.s3 = s3fs.S3FileSystem(anon=False)
+        
+        # Set up logging FIRST (before any logger calls)
+        self.logger = logging.getLogger(__name__)
+        for handler in self.logger.handlers[:]:  # make a copy of the list
+            self.logger.removeHandler(handler)
+        self.logger.setLevel(logging.INFO)
+        formatter = logging.Formatter(fmt='%(asctime)s: %(message)s')
+        
+        # Always print logs to stdout (set up early)
+        sh = logging.StreamHandler(sys.stdout)
+        sh.setFormatter(formatter)
+        self.logger.addHandler(sh)
+        
+        # Check if running on SageMaker (use job-specific output directory)
+        sm_output_dir = os.environ.get('SM_OUTPUT_DIR', None)
+        if sm_output_dir:
+            # SageMaker creates a job-specific folder, use it for output_dir
+            self.args['output_dir'] = sm_output_dir
+            self.logger.info(f"Running on SageMaker, using SM_OUTPUT_DIR: {sm_output_dir}")
+        
         # Create output directory (support both local and S3 paths)
         if args['mode'] == 'train':
             if self.args['output_dir'].startswith('s3://'):
@@ -110,28 +130,35 @@ class BrainToTextDecoder_Trainer:
         
         # Create checkpoint directory (support both local and S3 paths)
         if args['save_best_checkpoint'] or args['save_all_val_steps'] or args['save_final_model']: 
+            # If running on SageMaker, store checkpoints under the job output directory
+            checkpoint_dir = self.args.get('checkpoint_dir', None)
+            if sm_output_dir:
+                # Use SageMaker job-specific output directory for checkpoints
+                checkpoint_dir = os.path.join(sm_output_dir, 'checkpoints')
+                self.logger.info(f"Using SageMaker job output directory for checkpoints: {checkpoint_dir}")
+            elif checkpoint_dir is None or checkpoint_dir == '':
+                # Fallback: use output_dir/checkpoints if checkpoint_dir not specified
+                checkpoint_dir = os.path.join(self.args['output_dir'], 'checkpoints')
+                self.logger.info(f"checkpoint_dir not specified, using output_dir/checkpoints: {checkpoint_dir}")
+            
             # Add unique identifier to checkpoint directory if specified
             checkpoint_suffix = self.args.get('checkpoint_suffix', None)
             if checkpoint_suffix:
                 # Append suffix to checkpoint_dir (e.g., for job names, timestamps, etc.)
-                if self.args['checkpoint_dir'].endswith('/'):
-                    self.args['checkpoint_dir'] = self.args['checkpoint_dir'] + checkpoint_suffix
+                if checkpoint_dir.endswith('/'):
+                    checkpoint_dir = checkpoint_dir + checkpoint_suffix
                 else:
-                    self.args['checkpoint_dir'] = self.args['checkpoint_dir'] + '/' + checkpoint_suffix
-                self.logger.info(f"Using checkpoint directory with suffix: {self.args['checkpoint_dir']}")
+                    checkpoint_dir = checkpoint_dir + '/' + checkpoint_suffix
+                self.logger.info(f"Using checkpoint directory with suffix: {checkpoint_dir}")
             
-            if self.args['checkpoint_dir'].startswith('s3://'):
-                self.s3.makedirs(self.args['checkpoint_dir'], exist_ok=True)  # Changed to exist_ok=True to allow resuming
+            self.args['checkpoint_dir'] = checkpoint_dir
+            
+            if checkpoint_dir.startswith('s3://'):
+                self.s3.makedirs(checkpoint_dir, exist_ok=True)  # Changed to exist_ok=True to allow resuming
             else:
-                os.makedirs(self.args['checkpoint_dir'], exist_ok=True)  # Changed to exist_ok=True to allow resuming
+                os.makedirs(checkpoint_dir, exist_ok=True)  # Changed to exist_ok=True to allow resuming
 
-        # Set up logging
-        self.logger = logging.getLogger(__name__)
-        for handler in self.logger.handlers[:]:  # make a copy of the list
-            self.logger.removeHandler(handler)
-        self.logger.setLevel(logging.INFO)
-        formatter = logging.Formatter(fmt='%(asctime)s: %(message)s')        
-
+        # Set up file logging (if training mode)
         if args['mode']=='train':
             # During training, save logs to file in output directory
             log_path = os.path.join(self.args['output_dir'], 'training_log')
@@ -143,11 +170,6 @@ class BrainToTextDecoder_Trainer:
                 fh = logging.FileHandler(str(pathlib.Path(self.args['output_dir'],'training_log')))
             fh.setFormatter(formatter)
             self.logger.addHandler(fh)
-
-        # Always print logs to stdout
-        sh = logging.StreamHandler(sys.stdout)
-        sh.setFormatter(formatter)
-        self.logger.addHandler(sh)
 
         
         channel_path = os.environ.get('SM_CHANNEL_TRAINING', None)
