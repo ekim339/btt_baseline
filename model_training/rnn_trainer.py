@@ -133,38 +133,16 @@ class BrainToTextDecoder_Trainer:
         # Create checkpoint directory (support both local and S3 paths)
         if args['save_best_checkpoint'] or args['save_all_val_steps'] or args['save_final_model']: 
             # If running on SageMaker, store checkpoints directly under the job output directory
-            checkpoint_dir = self.args.get('checkpoint_dir', None)
             if sm_output_dir:
-                # Use SageMaker job-specific output directory directly (no 'checkpoints' subdirectory)
+                # Use SageMaker job-specific output directory directly
                 checkpoint_dir = sm_output_dir
-                # Add unique identifier to checkpoint directory if specified
-                checkpoint_suffix = self.args.get('checkpoint_suffix', None)
-                if checkpoint_suffix:
-                    # Append suffix to checkpoint_dir (e.g., for job names, timestamps, etc.)
-                    if checkpoint_dir.endswith('/'):
-                        checkpoint_dir = checkpoint_dir + checkpoint_suffix
-                    else:
-                        checkpoint_dir = checkpoint_dir + '/' + checkpoint_suffix
                 self.logger.info(f"Using SageMaker job output directory for checkpoints: {checkpoint_dir}")
-            elif checkpoint_dir is None or checkpoint_dir == '':
-                # Fallback: use output_dir/checkpoints if checkpoint_dir not specified
-                checkpoint_dir = os.path.join(self.args['output_dir'], 'checkpoints')
-                self.logger.info(f"checkpoint_dir not specified, using output_dir/checkpoints: {checkpoint_dir}")
-                # Add suffix if specified
-                checkpoint_suffix = self.args.get('checkpoint_suffix', None)
-                if checkpoint_suffix:
-                    if checkpoint_dir.endswith('/'):
-                        checkpoint_dir = checkpoint_dir + checkpoint_suffix
-                    else:
-                        checkpoint_dir = checkpoint_dir + '/' + checkpoint_suffix
             else:
-                # Use configured checkpoint_dir and add suffix if specified
-                checkpoint_suffix = self.args.get('checkpoint_suffix', None)
-                if checkpoint_suffix:
-                    if checkpoint_dir.endswith('/'):
-                        checkpoint_dir = checkpoint_dir + checkpoint_suffix
-                    else:
-                        checkpoint_dir = checkpoint_dir + '/' + checkpoint_suffix
+                # Use configured checkpoint_dir or fallback to output_dir/checkpoints
+                checkpoint_dir = self.args.get('checkpoint_dir', None)
+                if checkpoint_dir is None or checkpoint_dir == '':
+                    checkpoint_dir = os.path.join(self.args['output_dir'], 'checkpoints')
+                    self.logger.info(f"checkpoint_dir not specified, using output_dir/checkpoints: {checkpoint_dir}")
             
             self.args['checkpoint_dir'] = checkpoint_dir
             
