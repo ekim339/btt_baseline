@@ -600,6 +600,9 @@ class BrainToTextDecoder_Trainer:
         ''' 
         Load a training checkpoint (supports both local and S3 paths)
         '''
+        print("=" * 80)
+        print(f"LOADING CHECKPOINT: {load_path}")
+        print("=" * 80)
         self.logger.info(f"=" * 80)
         self.logger.info(f"LOADING CHECKPOINT: {load_path}")
         self.logger.info(f"=" * 80)
@@ -665,11 +668,20 @@ class BrainToTextDecoder_Trainer:
                 if isinstance(v, torch.Tensor):
                     state[k] = v.to(self.device)
 
+        print("=" * 80)
+        print(f"CHECKPOINT LOADED SUCCESSFULLY")
+        print(f"Resuming training from batch/step: {self.global_step}")
+        print(f"Next batch number will be: {self.global_step + 1}")
+        print("=" * 80)
         self.logger.info(f"=" * 80)
         self.logger.info(f"CHECKPOINT LOADED SUCCESSFULLY")
         self.logger.info(f"Resuming training from batch/step: {self.global_step}")
         self.logger.info(f"Next batch number will be: {self.global_step + 1}")
         self.logger.info(f"=" * 80)
+        # Force flush to ensure logs are visible
+        sys.stdout.flush()
+        for handler in self.logger.handlers:
+            handler.flush()
 
     def save_model_checkpoint(self, save_path, PER, loss):
         '''
@@ -829,7 +841,15 @@ class BrainToTextDecoder_Trainer:
         
         # Skip batches if resuming from checkpoint
         batches_to_skip = self.global_step
+        print(f"[DEBUG] batches_to_skip = {batches_to_skip}, self.global_step = {self.global_step}")
+        self.logger.info(f"[DEBUG] batches_to_skip = {batches_to_skip}, self.global_step = {self.global_step}")
         if batches_to_skip > 0:
+            print("=" * 80)
+            print("DATALOADER BATCH SKIPPING")
+            print("=" * 80)
+            print(f"Current global_step (from checkpoint): {batches_to_skip}")
+            print(f"Skipping first {batches_to_skip} batches to avoid duplicate training")
+            print(f"Will train until batch {self.args['num_training_batches']} (remaining: {self.args['num_training_batches'] - batches_to_skip} batches)")
             self.logger.info(f"=" * 80)
             self.logger.info(f"DATALOADER BATCH SKIPPING")
             self.logger.info(f"=" * 80)
@@ -838,11 +858,20 @@ class BrainToTextDecoder_Trainer:
             self.logger.info(f"Will train until batch {self.args['num_training_batches']} (remaining: {self.args['num_training_batches'] - batches_to_skip} batches)")
             # Use itertools.islice to skip the first N batches
             train_loader_iter = itertools.islice(self.train_loader, batches_to_skip, None)
+            print(f"✓ Dataloader iterator configured to skip {batches_to_skip} batches")
+            print("=" * 80)
             self.logger.info(f"✓ Dataloader iterator configured to skip {batches_to_skip} batches")
             self.logger.info(f"=" * 80)
+            # Force flush to ensure logs are visible
+            sys.stdout.flush()
+            for handler in self.logger.handlers:
+                handler.flush()
         else:
             train_loader_iter = self.train_loader
+            print("Starting fresh training (no batches to skip)")
+            print(f"[DEBUG] batches_to_skip is 0, so skipping batch skipping logs")
             self.logger.info(f"Starting fresh training (no batches to skip)")
+            self.logger.info(f"[DEBUG] batches_to_skip is 0, so skipping batch skipping logs")
 
         # train for specified number of batches
         first_batch_logged = False
