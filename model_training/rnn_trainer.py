@@ -14,6 +14,7 @@ import pickle
 import s3fs
 import tempfile
 import posixpath
+import itertools
 
 from dataset import BrainToTextDataset, train_test_split_indicies
 from data_augmentations import gauss_smooth
@@ -809,13 +810,19 @@ class BrainToTextDecoder_Trainer:
 
         train_start_time = time.time()
         
-        # Log resumption info if loading from checkpoint
-        if self.global_step > 0:
-            self.logger.info(f"Resuming training from batch {self.global_step}")
-            self.logger.info(f"Will train until batch {self.args['num_training_batches']} (remaining: {self.args['num_training_batches'] - self.global_step} batches)")
+        # Skip batches if resuming from checkpoint
+        batches_to_skip = self.global_step
+        if batches_to_skip > 0:
+            self.logger.info(f"Resuming training from batch {batches_to_skip}")
+            self.logger.info(f"Skipping first {batches_to_skip} batches to avoid duplicate training")
+            self.logger.info(f"Will train until batch {self.args['num_training_batches']} (remaining: {self.args['num_training_batches'] - batches_to_skip} batches)")
+            # Use itertools.islice to skip the first N batches
+            train_loader_iter = itertools.islice(self.train_loader, batches_to_skip, None)
+        else:
+            train_loader_iter = self.train_loader
 
         # train for specified number of batches
-        for i, batch in enumerate(self.train_loader):
+        for i, batch in enumerate(train_loader_iter):
             # Update global step counter
             self.global_step = self.global_step + 1
             
