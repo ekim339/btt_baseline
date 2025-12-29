@@ -96,10 +96,11 @@ args = parser.parse_args()
 # --------------------------------------------------------------------------------
 def load_model_from_checkpoint(checkpoint_path: str, device: torch.device) -> tuple:
     """
-    Load a model from a checkpoint directory.
+    Load a model from a checkpoint directory or checkpoint file.
     
     Args:
-        checkpoint_path: Path to checkpoint directory (S3 or local)
+        checkpoint_path: Path to checkpoint directory (containing checkpoint/args.yaml and checkpoint/best_checkpoint)
+                         OR path to checkpoint file directly (best_checkpoint)
         device: Device to load model on
     
     Returns:
@@ -108,13 +109,57 @@ def load_model_from_checkpoint(checkpoint_path: str, device: torch.device) -> tu
         is_diphone: Whether this is a diphone model
         mono_n_classes: Number of mono phoneme classes (if diphone model)
     """
-    # Load model args
-    args_path = os.path.join(checkpoint_path, 'checkpoint/args.yaml')
-    if checkpoint_path.startswith('s3://'):
-        with fs.open(args_path, 'rb') as f:
-            model_args = OmegaConf.load(f)
+    # Determine if checkpoint_path points to a file or directory
+    # Check if it ends with 'best_checkpoint' or similar checkpoint file names
+    checkpoint_file_names = ['best_checkpoint', 'final_checkpoint', 'checkpoint']
+    is_checkpoint_file = any(checkpoint_path.endswith(name) for name in checkpoint_file_names)
+    
+    if is_checkpoint_file:
+        # checkpoint_path points to the checkpoint file itself
+        # Extract directory: remove the checkpoint filename
+        checkpoint_dir = os.path.dirname(checkpoint_path.rstrip('/'))
+        checkpoint_file = checkpoint_path
+        # Try to find args.yaml in the same directory or parent directory
+        args_path_candidates = [
+            os.path.join(checkpoint_dir, 'args.yaml'),  # Same directory as checkpoint
+            os.path.join(os.path.dirname(checkpoint_dir), 'checkpoint/args.yaml'),  # Parent/checkpoint/args.yaml
+            os.path.join(checkpoint_dir, 'checkpoint/args.yaml'),  # checkpoint_dir/checkpoint/args.yaml
+        ]
     else:
-        model_args = OmegaConf.load(args_path)
+        # checkpoint_path points to a directory
+        checkpoint_dir = checkpoint_path.rstrip('/')
+        checkpoint_file = os.path.join(checkpoint_dir, 'checkpoint/best_checkpoint')
+        args_path_candidates = [
+            os.path.join(checkpoint_dir, 'checkpoint/args.yaml'),
+            os.path.join(checkpoint_dir, 'args.yaml'),  # Fallback: args.yaml in root
+        ]
+    
+    # Try to load args.yaml from candidate paths
+    model_args = None
+    args_path = None
+    for candidate_path in args_path_candidates:
+        try:
+            if checkpoint_dir.startswith('s3://') or candidate_path.startswith('s3://'):
+                if fs.exists(candidate_path):
+                    with fs.open(candidate_path, 'rb') as f:
+                        model_args = OmegaConf.load(f)
+                    args_path = candidate_path
+                    break
+            else:
+                if os.path.exists(candidate_path):
+                    model_args = OmegaConf.load(candidate_path)
+                    args_path = candidate_path
+                    break
+        except Exception as e:
+            continue
+    
+    if model_args is None:
+        raise FileNotFoundError(
+            f"Could not find args.yaml file. Tried: {args_path_candidates}. "
+            f"Please ensure args.yaml exists in the checkpoint directory."
+        )
+    
+    print(f"Loaded model args from: {args_path}")
     
     # Determine if this is a diphone model
     n_classes = model_args['dataset']['n_classes']
@@ -148,12 +193,15 @@ def load_model_from_checkpoint(checkpoint_path: str, device: torch.device) -> tu
         patch_stride=model_args['model']['patch_stride'],
     )
     
-    # Load checkpoint
-    checkpoint_file = os.path.join(checkpoint_path, 'checkpoint/best_checkpoint')
-    if checkpoint_path.startswith('s3://'):
+    # Load checkpoint file
+    if checkpoint_file.startswith('s3://'):
+        if not fs.exists(checkpoint_file):
+            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_file}")
         with fs.open(checkpoint_file, 'rb') as f:
             checkpoint = torch.load(f, map_location=device, weights_only=False)
     else:
+        if not os.path.exists(checkpoint_file):
+            raise FileNotFoundError(f"Checkpoint file not found: {checkpoint_file}")
         checkpoint = torch.load(checkpoint_file, map_location=device, weights_only=False)
     
     # Rename keys to remove "module." prefix (from DataParallel)
