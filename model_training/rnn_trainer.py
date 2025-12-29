@@ -373,8 +373,19 @@ class BrainToTextDecoder_Trainer:
         self.ctc_loss = torch.nn.CTCLoss(blank = 0, reduction = 'none', zero_infinity = False)
 
         # If a checkpoint is provided, then load from checkpoint
-        if self.args['init_from_checkpoint']:
-            self.load_model_checkpoint(self.args['init_checkpoint_path'])
+        print(f"[DEBUG] init_from_checkpoint = {self.args.get('init_from_checkpoint')} (type: {type(self.args.get('init_from_checkpoint')).__name__})")
+        print(f"[DEBUG] init_checkpoint_path = {self.args.get('init_checkpoint_path')}")
+        self.logger.info(f"[DEBUG] init_from_checkpoint = {self.args.get('init_from_checkpoint')} (type: {type(self.args.get('init_from_checkpoint')).__name__})")
+        self.logger.info(f"[DEBUG] init_checkpoint_path = {self.args.get('init_checkpoint_path')}")
+        
+        if self.args.get('init_from_checkpoint'):
+            checkpoint_path = self.args.get('init_checkpoint_path')
+            if checkpoint_path and checkpoint_path != 'None' and checkpoint_path != '':
+                self.load_model_checkpoint(checkpoint_path)
+            else:
+                self.logger.warning(f"init_from_checkpoint is True but init_checkpoint_path is invalid: {checkpoint_path}")
+        else:
+            self.logger.info("init_from_checkpoint is False, skipping checkpoint loading")
 
         # Set rnn and/or input layers to not trainable if specified 
         for name, param in self.model.named_parameters():

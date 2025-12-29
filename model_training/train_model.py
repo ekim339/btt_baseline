@@ -88,11 +88,13 @@ if __name__ == "__main__":
     if hps_json:
         try:
             hps = json.loads(hps_json)
+            print(f"[train_model] Raw hyperparameters from SM_HPS: {hps}")
             print(f"[train_model] Merging hyperparameters: {list(hps.keys())}")
             for key, value in hps.items():
                 if key == "config":
                     continue  # Skip config key, it's used to select the config file
                 
+                original_value = value
                 # Convert string booleans to actual booleans
                 if isinstance(value, str):
                     if value.lower() == "true":
@@ -103,12 +105,21 @@ if __name__ == "__main__":
                         value = None
                 
                 # Set the value in config (will override YAML value)
-                OmegaConf.set(cfg, key, value)
-                print(f"[train_model] Set {key} = {value} (type: {type(value).__name__})")
+                try:
+                    OmegaConf.set(cfg, key, value)
+                    print(f"[train_model] Set {key} = {value} (was: {original_value}, type: {type(value).__name__})")
+                except Exception as e:
+                    print(f"[train_model] Failed to set {key} = {value}: {e}")
         except Exception as e:
             print(f"[train_model] Failed to merge hyperparameters: {e}")
             import traceback
             traceback.print_exc()
+    else:
+        print("[train_model] No SM_HPS environment variable found, skipping hyperparameter merge")
+    
+    # Log final config values for checkpoint loading
+    print(f"[train_model] Final config - init_from_checkpoint: {cfg.get('init_from_checkpoint')} (type: {type(cfg.get('init_from_checkpoint')).__name__})")
+    print(f"[train_model] Final config - init_checkpoint_path: {cfg.get('init_checkpoint_path')}")
     
     trainer = BrainToTextDecoder_Trainer(cfg)
     metrics = trainer.train()
