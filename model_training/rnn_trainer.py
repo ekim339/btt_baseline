@@ -600,26 +600,40 @@ class BrainToTextDecoder_Trainer:
         ''' 
         Load a training checkpoint (supports both local and S3 paths)
         '''
+        self.logger.info(f"=" * 80)
+        self.logger.info(f"LOADING CHECKPOINT: {load_path}")
+        self.logger.info(f"=" * 80)
+        
         if load_path.startswith('s3://'):
             with self.s3.open(load_path, 'rb') as f:
                 checkpoint = torch.load(f, weights_only=False, map_location='cpu')
         else:
             checkpoint = torch.load(load_path, weights_only=False, map_location='cpu')
 
+        # Log checkpoint contents for verification
+        checkpoint_keys = list(checkpoint.keys())
+        self.logger.info(f"Checkpoint keys: {checkpoint_keys}")
+        
         self.model.load_state_dict(checkpoint['model_state_dict'])
         self.optimizer.load_state_dict(checkpoint['optimizer_state_dict'])
         self.learning_rate_scheduler.load_state_dict(checkpoint['scheduler_state_dict'])
         self.best_val_PER = checkpoint['val_PER'] # best phoneme error rate
         self.best_val_loss = checkpoint['val_loss'] if 'val_loss' in checkpoint.keys() else torch.inf
         
+        self.logger.info(f"✓ Model state dict loaded")
+        self.logger.info(f"✓ Optimizer state dict loaded")
+        self.logger.info(f"✓ Scheduler state dict loaded")
+        self.logger.info(f"✓ Best validation PER: {self.best_val_PER:.4f}")
+        self.logger.info(f"✓ Best validation loss: {self.best_val_loss:.4f}")
+        
         # Get global_step from checkpoint (batch number)
         # Check both 'global_step' and 'batch_number' for compatibility
         if 'global_step' in checkpoint:
             self.global_step = int(checkpoint['global_step'])
-            self.logger.info(f"Found global_step in checkpoint: {self.global_step}")
+            self.logger.info(f"✓ Found global_step in checkpoint: {self.global_step}")
         elif 'batch_number' in checkpoint:
             self.global_step = int(checkpoint['batch_number'])
-            self.logger.info(f"Found batch_number in checkpoint: {self.global_step}")
+            self.logger.info(f"✓ Found batch_number in checkpoint: {self.global_step}")
         else:
             # Fallback: use scheduler's last_epoch (which tracks how many times step() was called)
             # Since we increment global_step at the start of each iteration before training,
@@ -627,7 +641,7 @@ class BrainToTextDecoder_Trainer:
             self.global_step = self.learning_rate_scheduler.last_epoch
             if self.global_step < 0:
                 self.global_step = 0
-            self.logger.warning(f"global_step/batch_number not found in checkpoint, inferred from scheduler's last_epoch: {self.global_step} (next batch will be {self.global_step + 1})")
+            self.logger.warning(f"⚠ global_step/batch_number not found in checkpoint, inferred from scheduler's last_epoch: {self.global_step} (next batch will be {self.global_step + 1})")
         
         # Sync scheduler to match global_step
         # The scheduler's last_epoch should match global_step since we call scheduler.step() after each batch
@@ -639,9 +653,9 @@ class BrainToTextDecoder_Trainer:
             if steps_to_sync > 0:
                 for _ in range(steps_to_sync):
                     self.learning_rate_scheduler.step()
-                self.logger.info(f"Stepped scheduler {steps_to_sync} times to sync with global_step")
+                self.logger.info(f"✓ Stepped scheduler {steps_to_sync} times to sync with global_step")
             elif steps_to_sync < 0:
-                self.logger.warning(f"Scheduler last_epoch ({scheduler_last_epoch}) is ahead of global_step ({self.global_step}). This may indicate an issue.")
+                self.logger.warning(f"⚠ Scheduler last_epoch ({scheduler_last_epoch}) is ahead of global_step ({self.global_step}). This may indicate an issue.")
 
         self.model.to(self.device)
         
@@ -651,8 +665,11 @@ class BrainToTextDecoder_Trainer:
                 if isinstance(v, torch.Tensor):
                     state[k] = v.to(self.device)
 
-        self.logger.info(f"Loaded model from checkpoint: {load_path}")
-        self.logger.info(f"Resuming training from batch/step: {self.global_step} (next batch will be {self.global_step + 1})")
+        self.logger.info(f"=" * 80)
+        self.logger.info(f"CHECKPOINT LOADED SUCCESSFULLY")
+        self.logger.info(f"Resuming training from batch/step: {self.global_step}")
+        self.logger.info(f"Next batch number will be: {self.global_step + 1}")
+        self.logger.info(f"=" * 80)
 
     def save_model_checkpoint(self, save_path, PER, loss):
         '''
@@ -813,18 +830,39 @@ class BrainToTextDecoder_Trainer:
         # Skip batches if resuming from checkpoint
         batches_to_skip = self.global_step
         if batches_to_skip > 0:
-            self.logger.info(f"Resuming training from batch {batches_to_skip}")
+            self.logger.info(f"=" * 80)
+            self.logger.info(f"DATALOADER BATCH SKIPPING")
+            self.logger.info(f"=" * 80)
+            self.logger.info(f"Current global_step (from checkpoint): {batches_to_skip}")
             self.logger.info(f"Skipping first {batches_to_skip} batches to avoid duplicate training")
             self.logger.info(f"Will train until batch {self.args['num_training_batches']} (remaining: {self.args['num_training_batches'] - batches_to_skip} batches)")
             # Use itertools.islice to skip the first N batches
             train_loader_iter = itertools.islice(self.train_loader, batches_to_skip, None)
+            self.logger.info(f"✓ Dataloader iterator configured to skip {batches_to_skip} batches")
+            self.logger.info(f"=" * 80)
         else:
             train_loader_iter = self.train_loader
+            self.logger.info(f"Starting fresh training (no batches to skip)")
 
         # train for specified number of batches
+        first_batch_logged = False
         for i, batch in enumerate(train_loader_iter):
             # Update global step counter
             self.global_step = self.global_step + 1
+            
+            # Log verification after first batch to confirm correct resumption
+            if not first_batch_logged:
+                self.logger.info(f"=" * 80)
+                self.logger.info(f"VERIFICATION: First batch after resumption")
+                self.logger.info(f"  Dataloader iteration index: {i}")
+                self.logger.info(f"  Current global_step: {self.global_step}")
+                self.logger.info(f"  Expected batch number: {batches_to_skip + 1}")
+                if self.global_step == batches_to_skip + 1:
+                    self.logger.info(f"  ✓ VERIFIED: Batch number matches expected value!")
+                else:
+                    self.logger.warning(f"  ⚠ WARNING: Batch number mismatch! Expected {batches_to_skip + 1}, got {self.global_step}")
+                self.logger.info(f"=" * 80)
+                first_batch_logged = True
             
             # Skip if we've already passed this batch (shouldn't happen, but safety check)
             if self.global_step > self.args['num_training_batches']:
