@@ -27,9 +27,13 @@
 import os
 import sys
 import json
+import s3fs
 
 from omegaconf import OmegaConf
 from rnn_trainer import BrainToTextDecoder_Trainer
+
+# Initialize s3fs for S3 file access
+fs = s3fs.S3FileSystem(anon=False)
 
 
 def get_config_path(default_path: str = "rnn_args.yaml") -> str:
@@ -71,6 +75,12 @@ if __name__ == "__main__":
 
     print(f"[train_model] Final config path: {config_path}")
 
-    cfg = OmegaConf.load(config_path)
+    # Load config file (supports both local and S3 paths)
+    if config_path.startswith('s3://'):
+        with fs.open(config_path, 'rb') as f:
+            cfg = OmegaConf.load(f)
+    else:
+        cfg = OmegaConf.load(config_path)
+    
     trainer = BrainToTextDecoder_Trainer(cfg)
     metrics = trainer.train()
