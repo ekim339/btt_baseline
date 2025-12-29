@@ -409,60 +409,132 @@ def main():
     
     print()
     
-    # Ensemble the logits
-    print(f"Ensembling logits using method: {ensemble_method}...")
+    # Ensemble the logits by averaging log probabilities
+    print(f"Ensembling phoneme logits using method: {ensemble_method}...")
     ensemble_logits_list = []
     
     for trial_idx in range(total_test_trials):
-        # Collect logits from all models for this trial
+        # Collect phoneme logits from all models for this trial
         trial_logits = [phoneme_logits_list[model_idx][trial_idx] for model_idx in range(len(models))]
         
-        # Ensemble
-        ensemble_logits_trial = ensemble_logits(trial_logits, method=ensemble_method)
+        # Convert to numpy if needed
+        trial_logits = [logits if isinstance(logits, np.ndarray) else logits.cpu().numpy() 
+                       for logits in trial_logits]
+        
+        # Ensemble: average log probabilities (log-space averaging)
+        # This is equivalent to: log(mean(exp(logits))) but more numerically stable
+        if ensemble_method == 'average_logits':
+            # Simple average of logits (equivalent to geometric mean of probabilities)
+            ensemble_logits_trial = np.mean(trial_logits, axis=0)
+        elif ensemble_method == 'average_probs':
+            # Convert to probabilities, average, convert back to logits
+            # More numerically stable: subtract max before exp
+            max_logits = np.max([np.max(logits) for logits in trial_logits])
+            probs_list = [np.exp(logits - max_logits) for logits in trial_logits]
+            # Normalize each probability distribution
+            probs_list = [probs / (np.sum(probs, axis=-1, keepdims=True) + 1e-10) 
+                         for probs in probs_list]
+            avg_probs = np.mean(probs_list, axis=0)
+            ensemble_logits_trial = np.log(avg_probs + 1e-10) + max_logits
+        else:
+            raise ValueError(f"Unknown ensemble method: {ensemble_method}")
+        
         ensemble_logits_list.append(ensemble_logits_trial)
+    
+    print(f"Ensembled {len(ensemble_logits_list)} trials")
+    print()
     
     # Store ensemble logits in test_data structure
     trial_idx = 0
     for session in test_data.keys():
-        test_data[session]['logits'] = []
+        test_data[session]['ensemble_logits'] = []
         for _ in range(len(test_data[session]['neural_features'])):
-            test_data[session]['logits'].append(ensemble_logits_list[trial_idx])
+            test_data[session]['ensemble_logits'].append(ensemble_logits_list[trial_idx])
             trial_idx += 1
     
-    print()
-    
     # Convert ensemble logits to phoneme sequences
-    print("Converting ensemble logits to phoneme sequences...")
+    print("Generating phoneme sequences from ensemble logits...")
+    all_predictions = []
+    
     for session, data in test_data.items():
         data['pred_seq'] = []
-        for trial in range(len(data['logits'])):
-            logits = data['logits'][trial]
-            pred_seq = np.argmax(logits, axis=-1)
-            # Remove blanks (0)
-            pred_seq = [int(p) for p in pred_seq if p != 0]
-            # Remove consecutive duplicates
-            pred_seq = [pred_seq[i] for i in range(len(pred_seq)) if i == 0 or pred_seq[i] != pred_seq[i-1]]
-            # Convert to phonemes
-            pred_seq = [LOGIT_TO_PHONEME[p] for p in pred_seq]
-            data['pred_seq'].append(pred_seq)
+        for trial in range(len(data['ensemble_logits'])):
+            logits = data['ensemble_logits'][trial]  # Shape: (time, n_phoneme_classes)
+            
+            # Get most likely phoneme at each timestep
+            pred_seq = np.argmax(logits, axis=-1)  # Shape: (time,)
+            
+            # CTC collapse: remove consecutive duplicates
+            pred_seq_collapsed = [pred_seq[0]]
+            for i in range(1, len(pred_seq)):
+                if pred_seq[i] != pred_seq[i-1]:
+                    pred_seq_collapsed.append(pred_seq[i])
+            pred_seq = np.array(pred_seq_collapsed)
+            
+            # Remove blanks (class 0)
+            pred_seq = pred_seq[pred_seq != 0]
+            
+            # Convert to phoneme strings
+            pred_phonemes = [LOGIT_TO_PHONEME[int(p)] for p in pred_seq]
+            data['pred_seq'].append(pred_phonemes)
+            
+            # Store for output
+            all_predictions.append({
+                'session': session,
+                'block_num': data['block_num'][trial],
+                'trial_num': data['trial_num'][trial],
+                'predicted_phonemes': ' '.join(pred_phonemes),
+                'predicted_phoneme_ids': pred_seq.tolist()
+            })
             
             # Print some examples
             if trial < 3:
-                block_num = data['block_num'][trial]
-                trial_num = data['trial_num'][trial]
-                print(f'Session: {session}, Block: {block_num}, Trial: {trial_num}')
-                if eval_type == 'val':
-                    sentence_label = data['sentence_label'][trial]
+                print(f'Session: {session}, Block: {data["block_num"][trial]}, Trial: {data["trial_num"][trial]}')
+                if eval_type == 'val' and 'seq_class_ids' in data:
+                    sentence_label = data['sentence_label'][trial] if 'sentence_label' in data else None
                     true_seq = data['seq_class_ids'][trial][0:data['seq_len'][trial]]
-                    true_seq = [LOGIT_TO_PHONEME[p] for p in true_seq]
-                    print(f'Sentence label:      {sentence_label}')
-                    print(f'True sequence:       {" ".join(true_seq)}')
-                print(f'Predicted Sequence:  {" ".join(pred_seq)}')
+                    true_phonemes = [LOGIT_TO_PHONEME[int(p)] for p in true_seq]
+                    if sentence_label:
+                        print(f'Sentence label:      {sentence_label}')
+                    print(f'True phonemes:       {" ".join(true_phonemes)}')
+                print(f'Predicted phonemes:  {" ".join(pred_phonemes)}')
                 print()
     
-    # Language model inference (if requested)
+    print(f"Generated phoneme sequences for {len(all_predictions)} test trials")
+    print()
+    
+    # Save predictions to CSV
+    output_dir = args.output_dir if args.output_dir else checkpoint_paths[0]
+    output_file = os.path.join(
+        output_dir,
+        f'ensemble_{len(checkpoint_paths)}models_{eval_type}_phoneme_predictions_{time.strftime("%Y%m%d_%H%M%S")}.csv'
+    )
+    
+    df_out = pd.DataFrame(all_predictions)
+    
+    if output_dir.startswith('s3://'):
+        with fs.open(output_file, 'w') as f:
+            df_out.to_csv(f, index=False)
+    else:
+        os.makedirs(output_dir, exist_ok=True)
+        df_out.to_csv(output_file, index=False)
+    
+    print(f"Saved phoneme predictions to {output_file}")
+    print()
+    
+    # Print summary statistics
+    print("=" * 80)
+    print("ENSEMBLE INFERENCE SUMMARY")
+    print("=" * 80)
+    print(f"Number of models: {len(checkpoint_paths)}")
+    print(f"Ensemble method: {ensemble_method}")
+    print(f"Total test trials: {total_test_trials}")
+    print(f"Output file: {output_file}")
+    print("=" * 80)
+    
+    # Optional: Language model inference (if requested)
     if args.use_language_model:
-        print("Running language model inference...")
+        print("Running language model inference on ensemble logits...")
         r = redis.Redis(host='localhost', port=6379, db=0)
         r.flushall()
         
@@ -474,18 +546,12 @@ def main():
         remote_lm_output_final_lastEntrySeen = get_current_redis_time_ms(r)
         remote_lm_done_resetting_lastEntrySeen = get_current_redis_time_ms(r)
         
-        lm_results = {
-            'session': [],
-            'block': [],
-            'trial': [],
-            'true_sentence': [],
-            'pred_sentence': [],
-        }
+        lm_results = []
         
         with tqdm(total=total_test_trials, desc='Running language model', unit='trial') as pbar:
             for session in test_data.keys():
-                for trial in range(len(test_data[session]['logits'])):
-                    logits = rearrange_speech_logits_pt(test_data[session]['logits'][trial])[0]
+                for trial in range(len(test_data[session]['ensemble_logits'])):
+                    logits = rearrange_speech_logits_pt(test_data[session]['ensemble_logits'][trial])[0]
                     
                     remote_lm_done_resetting_lastEntrySeen = reset_remote_language_model(
                         r, remote_lm_done_resetting_lastEntrySeen
@@ -507,55 +573,33 @@ def main():
                     
                     best_candidate_sentence = lm_out['candidate_sentences'][0]
                     
-                    lm_results['session'].append(session)
-                    lm_results['block'].append(test_data[session]['block_num'][trial])
-                    lm_results['trial'].append(test_data[session]['trial_num'][trial])
-                    if eval_type == 'val':
-                        lm_results['true_sentence'].append(test_data[session]['sentence_label'][trial])
-                    else:
-                        lm_results['true_sentence'].append(None)
-                    lm_results['pred_sentence'].append(best_candidate_sentence)
+                    lm_results.append({
+                        'session': session,
+                        'block_num': test_data[session]['block_num'][trial],
+                        'trial_num': test_data[session]['trial_num'][trial],
+                        'predicted_sentence': best_candidate_sentence
+                    })
                     
                     pbar.update(1)
         
-        # Calculate WER if validation set
-        if eval_type == 'val':
-            total_true_length = 0
-            total_edit_distance = 0
-            
-            for i in range(len(lm_results['pred_sentence'])):
-                true_sentence = remove_punctuation(lm_results['true_sentence'][i]).strip()
-                pred_sentence = remove_punctuation(lm_results['pred_sentence'][i]).strip()
-                ed = editdistance.eval(true_sentence.split(), pred_sentence.split())
-                
-                total_true_length += len(true_sentence.split())
-                total_edit_distance += ed
-            
-            print(f'Total true sentence length: {total_true_length}')
-            print(f'Total edit distance: {total_edit_distance}')
-            print(f'Aggregate Word Error Rate (WER): {100 * total_edit_distance / total_true_length:.2f}%')
-            print()
-        
-        # Save results
+        # Save language model results
         output_dir = args.output_dir if args.output_dir else checkpoint_paths[0]
-        output_file = os.path.join(
+        lm_output_file = os.path.join(
             output_dir,
-            f'ensemble_{len(checkpoint_paths)}models_{eval_type}_predicted_sentences_{time.strftime("%Y%m%d_%H%M%S")}.csv'
+            f'ensemble_{len(checkpoint_paths)}models_{eval_type}_lm_predictions_{time.strftime("%Y%m%d_%H%M%S")}.csv'
         )
-        ids = [i for i in range(len(lm_results['pred_sentence']))]
-        df_out = pd.DataFrame({'id': ids, 'text': lm_results['pred_sentence']})
+        
+        df_lm = pd.DataFrame(lm_results)
         
         if output_dir.startswith('s3://'):
-            with fs.open(output_file, 'w') as f:
-                df_out.to_csv(f, index=False)
+            with fs.open(lm_output_file, 'w') as f:
+                df_lm.to_csv(f, index=False)
         else:
             os.makedirs(output_dir, exist_ok=True)
-            df_out.to_csv(output_file, index=False)
+            df_lm.to_csv(lm_output_file, index=False)
         
-        print(f"Saved results to {output_file}")
-    else:
-        print("Skipping language model inference (use --use_language_model to enable)")
-        print("Ensemble phoneme predictions are available in test_data['pred_seq']")
+        print(f"Saved language model predictions to {lm_output_file}")
+        print()
 
 
 if __name__ == '__main__':
