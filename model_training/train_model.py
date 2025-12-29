@@ -82,5 +82,33 @@ if __name__ == "__main__":
     else:
         cfg = OmegaConf.load(config_path)
     
+    # Merge SageMaker hyperparameters into config (override YAML values)
+    # SageMaker passes hyperparameters as strings, so we need to convert them appropriately
+    hps_json = os.environ.get("SM_HPS")
+    if hps_json:
+        try:
+            hps = json.loads(hps_json)
+            print(f"[train_model] Merging hyperparameters: {list(hps.keys())}")
+            for key, value in hps.items():
+                if key == "config":
+                    continue  # Skip config key, it's used to select the config file
+                
+                # Convert string booleans to actual booleans
+                if isinstance(value, str):
+                    if value.lower() == "true":
+                        value = True
+                    elif value.lower() == "false":
+                        value = False
+                    elif value.lower() == "none" or value.lower() == "null":
+                        value = None
+                
+                # Set the value in config (will override YAML value)
+                OmegaConf.set(cfg, key, value)
+                print(f"[train_model] Set {key} = {value} (type: {type(value).__name__})")
+        except Exception as e:
+            print(f"[train_model] Failed to merge hyperparameters: {e}")
+            import traceback
+            traceback.print_exc()
+    
     trainer = BrainToTextDecoder_Trainer(cfg)
     metrics = trainer.train()
