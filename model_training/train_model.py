@@ -106,10 +106,13 @@ if __name__ == "__main__":
                 
                 # Set the value in config (will override YAML value)
                 try:
-                    OmegaConf.set(cfg, key, value)
+                    # Use dictionary-style assignment for OmegaConf
+                    cfg[key] = value
                     print(f"[train_model] Set {key} = {value} (was: {original_value}, type: {type(value).__name__})")
                 except Exception as e:
                     print(f"[train_model] Failed to set {key} = {value}: {e}")
+                    import traceback
+                    traceback.print_exc()
         except Exception as e:
             print(f"[train_model] Failed to merge hyperparameters: {e}")
             import traceback
