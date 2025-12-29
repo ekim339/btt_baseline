@@ -61,8 +61,8 @@ parser.add_argument(
 parser.add_argument(
     '--csv_path',
     type=str,
-    default="s3://4k-woody-btt/4k/data/t15_copyTaskData_description.csv",
-    help='Path to the CSV file with metadata about the dataset.'
+    default=None,
+    help='Path to the CSV file with metadata about the dataset (optional, only needed for corpus info).'
 )
 parser.add_argument(
     '--gpu_number',
@@ -255,12 +255,17 @@ def main():
     # Use the first model's config for data loading (assuming all models use same sessions)
     primary_config = model_configs[0]
     
-    # Load CSV file
-    if args.csv_path.startswith('s3://'):
-        with fs.open(args.csv_path, 'rb') as f:
-            b2txt_csv_df = pd.read_csv(f)
+    # Load CSV file (optional, only needed for corpus info)
+    b2txt_csv_df = None
+    if args.csv_path:
+        if args.csv_path.startswith('s3://'):
+            with fs.open(args.csv_path, 'rb') as f:
+                b2txt_csv_df = pd.read_csv(f)
+        else:
+            b2txt_csv_df = pd.read_csv(args.csv_path)
+        print(f"Loaded CSV metadata file: {args.csv_path}")
     else:
-        b2txt_csv_df = pd.read_csv(args.csv_path)
+        print("No CSV path provided, skipping corpus metadata lookup")
     
     # Helper function to load h5py file (handles both S3 and local paths)
     def load_h5py_file_safe(file_path, csv_df):
@@ -299,10 +304,17 @@ def main():
             block_num = g.attrs['block_num']
             trial_num = g.attrs['trial_num']
             
-            year, month, day = session_name.split('.')[1:]
-            date = f'{year}-{month}-{day}'
-            row = csv_df[(csv_df['Date'] == date) & (csv_df['Block number'] == block_num)]
-            corpus_name = row['Corpus'].values[0]
+            # Get corpus name from CSV if available, otherwise use None
+            corpus_name = None
+            if csv_df is not None:
+                try:
+                    year, month, day = session_name.split('.')[1:]
+                    date = f'{year}-{month}-{day}'
+                    row = csv_df[(csv_df['Date'] == date) & (csv_df['Block number'] == block_num)]
+                    if len(row) > 0:
+                        corpus_name = row['Corpus'].values[0]
+                except Exception as e:
+                    print(f"Warning: Could not lookup corpus for session {session_name}, block {block_num}: {e}")
             
             data['neural_features'].append(neural_features)
             data['n_time_steps'].append(n_time_steps)
@@ -351,7 +363,7 @@ def main():
             for trial in range(len(data['neural_features'])):
                 neural_input = data['neural_features'][trial]
                 neural_input = np.expand_dims(neural_input, axis=0)
-                neural_input = torch.tensor(neural_input, device=device, dtype=_amp_dtype())
+                neural_input = torch.tensor(neural_input, device=device, dtype=torch.bfloat16)
                 
                 # Get logits from each model
                 trial_logits = []
