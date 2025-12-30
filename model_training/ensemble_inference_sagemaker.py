@@ -27,9 +27,8 @@ if sm_hps:
     # Build command line arguments
     sys.argv = ['ensemble_inference.py']
     
-    # Add checkpoint paths
-    for cp in checkpoint_paths:
-        sys.argv.extend(['--checkpoint_paths', cp])
+    # Add checkpoint paths (nargs='+' expects all values after a single flag)
+    sys.argv.extend(['--checkpoint_paths'] + checkpoint_paths)
     
     # Add other arguments
     sys.argv.extend(['--data_dir', data_dir])

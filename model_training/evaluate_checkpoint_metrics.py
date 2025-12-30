@@ -327,7 +327,11 @@ def main():
                 # Get logits
                 with torch.no_grad():
                     logits = runSingleDecodingStep(neural_input, input_layer, model, model_args, device)
-                    logits = logits[0].cpu().numpy()  # Remove batch dimension, shape: (time, n_classes)
+                    # runSingleDecodingStep already returns numpy array, just remove batch dimension
+                    if isinstance(logits, torch.Tensor):
+                        logits = logits[0].cpu().numpy()  # Remove batch dimension, shape: (time, n_classes)
+                    else:
+                        logits = logits[0]  # Already numpy, just remove batch dimension
                 
                 # Get true labels
                 # For diphone models, HDF5 files store original phoneme sequence in seq_class_ids
