@@ -513,11 +513,27 @@ def main():
         trial_logits = [logits if isinstance(logits, np.ndarray) else logits.cpu().numpy() 
                        for logits in trial_logits]
         
+        # Check if all logits have the same time dimension
+        time_dims = [logits.shape[0] for logits in trial_logits]
+        if len(set(time_dims)) > 1:
+            # Different time dimensions - need to align them
+            print(f"Warning: Trial {trial_idx} has different time dimensions: {time_dims}")
+            print(f"  Aligning logits to minimum length: {min(time_dims)}")
+            
+            # Option 1: Use minimum length (truncate longer sequences)
+            min_time = min(time_dims)
+            trial_logits = [logits[:min_time, :] for logits in trial_logits]
+            
+            # Alternative: Could interpolate to a common length, but truncation is simpler
+            # and preserves the beginning of the sequence which is usually more important
+        
         # Ensemble: average log probabilities (log-space averaging)
         # This is equivalent to: log(mean(exp(logits))) but more numerically stable
         if ensemble_method == 'average_logits':
             # Simple average of logits (equivalent to geometric mean of probabilities)
-            ensemble_logits_trial = np.mean(trial_logits, axis=0)
+            # Stack logits: (n_models, time, n_classes) then average along model axis
+            stacked_logits = np.stack(trial_logits, axis=0)  # (n_models, time, n_classes)
+            ensemble_logits_trial = np.mean(stacked_logits, axis=0)  # (time, n_classes)
         elif ensemble_method == 'average_probs':
             # Convert to probabilities, average, convert back to logits
             # More numerically stable: subtract max before exp
@@ -526,7 +542,8 @@ def main():
             # Normalize each probability distribution
             probs_list = [probs / (np.sum(probs, axis=-1, keepdims=True) + 1e-10) 
                          for probs in probs_list]
-            avg_probs = np.mean(probs_list, axis=0)
+            stacked_probs = np.stack(probs_list, axis=0)  # (n_models, time, n_classes)
+            avg_probs = np.mean(stacked_probs, axis=0)  # (time, n_classes)
             ensemble_logits_trial = np.log(avg_probs + 1e-10) + max_logits
         else:
             raise ValueError(f"Unknown ensemble method: {ensemble_method}")
