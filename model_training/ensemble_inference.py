@@ -128,10 +128,42 @@ def load_model_from_checkpoint(checkpoint_path: str, device: torch.device) -> tu
     else:
         # checkpoint_path points to a directory
         checkpoint_dir = checkpoint_path.rstrip('/')
-        checkpoint_file = os.path.join(checkpoint_dir, 'checkpoint/best_checkpoint')
+        
+        # Try multiple checkpoint file locations (check both structures)
+        checkpoint_file_candidates = [
+            os.path.join(checkpoint_dir, 'best_checkpoint'),  # Direct: checkpoint_dir/best_checkpoint
+            os.path.join(checkpoint_dir, 'checkpoint/best_checkpoint'),  # Nested: checkpoint_dir/checkpoint/best_checkpoint
+            os.path.join(checkpoint_dir, 'final_checkpoint'),
+            os.path.join(checkpoint_dir, 'checkpoint/final_checkpoint'),
+        ]
+        
+        # Find the first existing checkpoint file
+        checkpoint_file = None
+        for candidate in checkpoint_file_candidates:
+            try:
+                if checkpoint_dir.startswith('s3://'):
+                    if fs.exists(candidate):
+                        checkpoint_file = candidate
+                        print(f"Found checkpoint file at: {checkpoint_file}")
+                        break
+                else:
+                    if os.path.exists(candidate):
+                        checkpoint_file = candidate
+                        print(f"Found checkpoint file at: {checkpoint_file}")
+                        break
+            except Exception:
+                continue
+        
+        # If no checkpoint file found, default to best_checkpoint (will error later if doesn't exist)
+        if checkpoint_file is None:
+            checkpoint_file = checkpoint_file_candidates[0]  # Default to best_checkpoint
+            print(f"Checkpoint file not found in common locations, trying: {checkpoint_file}")
+        
+        # Try to find args.yaml in multiple locations
         args_path_candidates = [
-            os.path.join(checkpoint_dir, 'checkpoint/args.yaml'),
-            os.path.join(checkpoint_dir, 'args.yaml'),  # Fallback: args.yaml in root
+            os.path.join(checkpoint_dir, 'args.yaml'),  # Same directory
+            os.path.join(checkpoint_dir, 'checkpoint/args.yaml'),  # Nested checkpoint directory
+            os.path.join(os.path.dirname(checkpoint_file), 'args.yaml'),  # Same directory as checkpoint file
         ]
     
     # Try to load args.yaml from candidate paths
