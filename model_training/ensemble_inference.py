@@ -678,21 +678,33 @@ def main():
     
     # Save predictions to CSV
     output_dir = args.output_dir if args.output_dir else checkpoint_paths[0]
-    output_file = os.path.join(
-        output_dir,
-        f'ensemble_{len(checkpoint_paths)}models_{eval_type}_phoneme_predictions_{time.strftime("%Y%m%d_%H%M%S")}.csv'
-    )
+    
+    # Handle S3 paths correctly (os.path.join doesn't work with s3:// URLs)
+    filename = f'ensemble_{len(checkpoint_paths)}models_{eval_type}_phoneme_predictions_{time.strftime("%Y%m%d_%H%M%S")}.csv'
+    if output_dir.startswith('s3://'):
+        # For S3, ensure proper path joining
+        output_file = output_dir.rstrip('/') + '/' + filename
+    else:
+        output_file = os.path.join(output_dir, filename)
     
     df_out = pd.DataFrame(all_predictions)
     
     if output_dir.startswith('s3://'):
-        with fs.open(output_file, 'w') as f:
-            df_out.to_csv(f, index=False)
+        try:
+            # Ensure the directory exists in S3 (create if needed)
+            fs.makedirs(output_dir, exist_ok=True)
+            # Write CSV to S3
+            with fs.open(output_file, 'w') as f:
+                df_out.to_csv(f, index=False)
+            print(f"Successfully saved phoneme predictions to {output_file}")
+        except Exception as e:
+            print(f"ERROR saving to S3: {e}")
+            print(f"Attempted to save to: {output_file}")
+            raise
     else:
         os.makedirs(output_dir, exist_ok=True)
         df_out.to_csv(output_file, index=False)
-    
-    print(f"Saved phoneme predictions to {output_file}")
+        print(f"Saved phoneme predictions to {output_file}")
     print()
     
     # Print summary statistics
@@ -757,21 +769,32 @@ def main():
         
         # Save language model results
         output_dir = args.output_dir if args.output_dir else checkpoint_paths[0]
-        lm_output_file = os.path.join(
-            output_dir,
-            f'ensemble_{len(checkpoint_paths)}models_{eval_type}_lm_predictions_{time.strftime("%Y%m%d_%H%M%S")}.csv'
-        )
+        
+        # Handle S3 paths correctly (os.path.join doesn't work with s3:// URLs)
+        lm_filename = f'ensemble_{len(checkpoint_paths)}models_{eval_type}_lm_predictions_{time.strftime("%Y%m%d_%H%M%S")}.csv'
+        if output_dir.startswith('s3://'):
+            lm_output_file = output_dir.rstrip('/') + '/' + lm_filename
+        else:
+            lm_output_file = os.path.join(output_dir, lm_filename)
         
         df_lm = pd.DataFrame(lm_results)
         
         if output_dir.startswith('s3://'):
-            with fs.open(lm_output_file, 'w') as f:
-                df_lm.to_csv(f, index=False)
+            try:
+                # Ensure the directory exists in S3 (create if needed)
+                fs.makedirs(output_dir, exist_ok=True)
+                # Write CSV to S3
+                with fs.open(lm_output_file, 'w') as f:
+                    df_lm.to_csv(f, index=False)
+                print(f"Successfully saved language model predictions to {lm_output_file}")
+            except Exception as e:
+                print(f"ERROR saving LM results to S3: {e}")
+                print(f"Attempted to save to: {lm_output_file}")
+                raise
         else:
             os.makedirs(output_dir, exist_ok=True)
             df_lm.to_csv(lm_output_file, index=False)
-        
-        print(f"Saved language model predictions to {lm_output_file}")
+            print(f"Saved language model predictions to {lm_output_file}")
         print()
 
 
