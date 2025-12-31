@@ -413,7 +413,8 @@ class BrainToTextDecoder_Trainer:
         if len(day_params) != 0:
             param_groups = [
                     {'params' : bias_params, 'weight_decay' : 0, 'group_type' : 'bias'},
-                    {'params' : day_params, 'lr' : self.args['lr_max_day'], 'weight_decay' : self.args['weight_decay_day'], 'group_type' : 'day_layer'},
+                    #{'params' : day_params, 'lr' : self.args['lr_max_day'], 'weight_decay' : self.args['weight_decay_day'], 'group_type' : 'day_layer'},
+                    {'params' : day_params, 'lr' : self.args['lr_max_day'], 'weight_decay' : self.args.get('weight_decay_day', 0), 'group_type' : 'day_layer'},
                     {'params' : other_params, 'group_type' : 'other'}
                 ]
         else: 
@@ -422,6 +423,8 @@ class BrainToTextDecoder_Trainer:
                     {'params' : other_params, 'group_type' : 'other'}
                 ]
             
+        '''
+        # AdamW optimizer
         optim = torch.optim.AdamW(
             param_groups,
             lr = self.args['lr_max'],
@@ -429,6 +432,16 @@ class BrainToTextDecoder_Trainer:
             eps = self.args['epsilon'],
             weight_decay = self.args['weight_decay'],
             fused = True
+        )
+        '''
+
+        # Use SGD optimizer
+        optim = torch.optim.SGD(
+            param_groups,
+            lr = self.args['lr_max'],
+            momentum = self.args.get('momentum', 0.9),  # Default momentum for SGD
+            weight_decay = self.args.get('weight_decay', 0.0),  # Default weight decay
+            nesterov = self.args.get('nesterov', False)  # Nesterov momentum (optional)
         )
 
         return optim 
