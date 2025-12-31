@@ -193,6 +193,7 @@ def marginalize_diphone_logits_vectorized(
     
     # Reshape to (n_timesteps, n_diphone_classes)
     diphone_logits_flat = diphone_logits.reshape(-1, original_shape[-1])
+    n_timesteps = diphone_logits_flat.shape[0]  # Number of timesteps (flattened batch and time)
     
     if use_log_space:
         # Use log-sum-exp for numerical stability
@@ -209,6 +210,7 @@ def marginalize_diphone_logits_vectorized(
         phoneme_logits_flat[:, 0] = diphone_logits_flat[:, 0]
         
         # For each phoneme (1 to P), compute log-sum-exp over diphones that end with it
+        P = mono_n_classes - 1  # Number of non-blank phoneme classes
         for ph in range(1, mono_n_classes):
             # Get diphone indices that map to this phoneme
             diphone_indices = []
