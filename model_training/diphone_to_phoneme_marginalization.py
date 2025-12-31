@@ -181,8 +181,17 @@ def marginalize_diphone_logits_vectorized(
         dtype = diphone_logits.dtype
     else:
         device = 'cpu'
-        dtype = diphone_logits.dtype
-        diphone_logits = torch.from_numpy(diphone_logits)
+        # Convert numpy dtype to torch dtype
+        if isinstance(diphone_logits, np.ndarray):
+            if diphone_logits.dtype == np.float32:
+                dtype = torch.float32
+            elif diphone_logits.dtype == np.float64:
+                dtype = torch.float64
+            else:
+                dtype = torch.float32  # Default to float32
+        else:
+            dtype = torch.float32
+        diphone_logits = torch.from_numpy(diphone_logits).to(dtype)
     
     # Create mapping matrix
     mapping_matrix = create_diphone_to_phoneme_mapping_matrix(mono_n_classes, device=device)
